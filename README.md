@@ -47,11 +47,11 @@ const session = await tapaya.checkout.sessions.create(
 return Response.redirect(session.url, 303)
 ```
 
-When the customer returns to your success or cancel URL, retrieve the session and compare it with the stored order.
+When the customer returns to your success or cancel URL, get the session and compare it with the stored order.
 A redirect alone never proves payment.
 
 ```ts
-const current = await tapaya.checkout.sessions.retrieve(order.checkoutSessionId)
+const current = await tapaya.checkout.sessions.get(order.checkoutSessionId)
 
 const matches =
   current.merchantOrderId === order.id &&
@@ -94,7 +94,7 @@ time it validates a local HTTP URL.
 Each method also accepts `signal`, `timeoutMs`, and `maxRetries` for a single request:
 
 ```ts
-const current = await tapaya.checkout.sessions.retrieve(sessionId, {
+const current = await tapaya.checkout.sessions.get(sessionId, {
   signal: request.signal,
   timeoutMs: 5_000,
 })
@@ -130,9 +130,9 @@ codes, and reports problems as `TapayaInvalidRequestError`. See
 [Checkout Sessions](https://docs.tapaya.com/online/integration/api_integration#checkout-sessions) for field rules,
 tax totals, and customer address limits.
 
-### Retrieve a session
+### Get a session
 
-`tapaya.checkout.sessions.retrieve(id, options?)` returns the current state of a session.
+`tapaya.checkout.sessions.get(id, options?)` returns the current state of a session.
 
 Both methods return a `CheckoutSession`:
 
@@ -164,7 +164,7 @@ create a session for that attempt, with the same parameters. Tapaya returns the 
 creating a new one. Use a new key only for a new checkout attempt, never to retry an uncertain result.
 
 A repeated create returns the original response, including its original payment status. Call
-`tapaya.checkout.sessions.retrieve(session.id)` to get the current status before fulfilling the order.
+`tapaya.checkout.sessions.get(session.id)` to get the current status before fulfilling the order.
 
 The SDK retries both methods after network errors, timeouts, and HTTP 429, 502, 503, and 504. It also retries a
 create that fails with HTTP 409 `API-0024`, which means an earlier request with the same key is still being
