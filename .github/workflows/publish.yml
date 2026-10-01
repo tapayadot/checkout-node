@@ -128,7 +128,7 @@ jobs:
           NPM_CONFIG_PROVENANCE: ${{ !github.event.repository.private }}
           NODE_AUTH_TOKEN: ''
           NPM_TOKEN: ''
-        run: npm stage publish release/checkout.tgz --registry=https://registry.npmjs.org --access public --ignore-scripts
+        run: npm stage publish ./release/checkout.tgz --registry=https://registry.npmjs.org --access public --ignore-scripts
       - name: Record approval step
         run: |
           echo 'The release is staged on npm. A maintainer must inspect and approve it with 2FA on npmjs.com.' >> "$GITHUB_STEP_SUMMARY"
