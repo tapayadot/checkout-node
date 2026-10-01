@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - feat/initialize-checkout-sdk
+      - main
   pull_request:
 
 permissions:
