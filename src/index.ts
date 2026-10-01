@@ -399,7 +399,7 @@ class CheckoutSessions {
     return parseSession(response)
   }
 
-  async retrieve(id: string, options: RequestOptions = {}): Promise<CheckoutSession> {
+  async get(id: string, options: RequestOptions = {}): Promise<CheckoutSession> {
     if (!id.trim() || id.length > 200 || id === '.' || id === '..') {
       throw new TapayaValidationError('Invalid checkout session ID', [{ field: 'id', message: 'Invalid checkout session ID' }])
     }

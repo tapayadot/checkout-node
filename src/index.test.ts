@@ -79,7 +79,7 @@ describe('client configuration', () => {
     const fetchImpl = vi.fn().mockImplementation(async () => response(200, created))
     const sessions = client(fetchImpl, { environment })
     await sessions.create(params)
-    await sessions.retrieve(created.id)
+    await sessions.get(created.id)
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
       `${host}/merchant/checkout-sessions`,
       `${host}/merchant/checkout-sessions/${created.id}`,
@@ -93,7 +93,7 @@ describe('client configuration', () => {
     const sessions = new Tapaya(undefined, { fetch: fetchImpl }).checkout.sessions
     vi.stubEnv('TAPAYA_SECRET_KEY', 'changed-secret')
     vi.stubEnv('TAPAYA_ENVIRONMENT', 'sandbox')
-    await sessions.retrieve(created.id)
+    await sessions.get(created.id)
     expect(fetchImpl.mock.calls[0][0]).toBe(`https://api.tapaya.com/merchant/checkout-sessions/${created.id}`)
     expect(fetchImpl.mock.calls[0][1].headers.authorization).toBe('Bearer environment-secret')
   })
@@ -145,7 +145,7 @@ describe('client configuration', () => {
     const baseUrl = `http://${host}:4321`
     const fetchImpl = vi.fn().mockImplementation(async () => response(200, created))
     vi.stubEnv('NODE_ENV', 'development')
-    await client(fetchImpl, { baseUrl }).retrieve(created.id)
+    await client(fetchImpl, { baseUrl }).get(created.id)
     expect(fetchImpl.mock.calls[0][0]).toBe(`${baseUrl}/merchant/checkout-sessions/${created.id}`)
     expect(fetchImpl.mock.calls[0][1].redirect).toBe('error')
     vi.stubEnv('NODE_ENV', 'production')
@@ -165,7 +165,7 @@ describe('client configuration', () => {
     const fetchImpl = vi.fn()
     const sessions = client(fetchImpl)
     const field = Object.keys(options)[0]
-    await expect(sessions.retrieve(created.id, options)).rejects.toMatchObject({
+    await expect(sessions.get(created.id, options)).rejects.toMatchObject({
       name: 'TapayaValidationError',
       message: `Invalid ${field}`,
       fieldErrors: [{ field, message: `Invalid ${field}` }],
@@ -178,7 +178,7 @@ describe('client configuration', () => {
     const fetchImpl = vi.fn().mockImplementation(async () => response(200, created))
     const sessions = client(fetchImpl)
     await sessions.create(params, { idempotencyKey: 'attempt-1' })
-    await sessions.retrieve(created.id)
+    await sessions.get(created.id)
     expect(fetchImpl.mock.calls[0][1].headers).toEqual({
       accept: 'application/json',
       authorization: 'Bearer secret',
@@ -341,46 +341,46 @@ describe('checkout.sessions.create', () => {
   )
 })
 
-describe('checkout.sessions.retrieve', () => {
+describe('checkout.sessions.get', () => {
   it('returns the complete session', async () => {
     const body = { ...created, items: [item], status: 'completed', paymentStatus: 'successful',
       paymentReference: 'pay_a82Hd', completedAt: '2026-09-05T18:32:00Z' }
     const fetchImpl = vi.fn().mockResolvedValue(response(200, body))
-    await expect(client(fetchImpl).retrieve(created.id)).resolves.toEqual({ ...session, ...body })
+    await expect(client(fetchImpl).get(created.id)).resolves.toEqual({ ...session, ...body })
     expect(fetchImpl.mock.calls[0][1].method).toBe('GET')
   })
 
   it('returns a decline as a failed payment, not an error', async () => {
     const body = { ...session, paymentStatus: 'failed', paymentReference: 'pay_declined' }
-    await expect(client(vi.fn().mockResolvedValue(response(200, body))).retrieve(created.id)).resolves.toEqual(body)
+    await expect(client(vi.fn().mockResolvedValue(response(200, body))).get(created.id)).resolves.toEqual(body)
   })
 
   it.each(['', ' ', '.', '..', 'x'.repeat(201)])('rejects invalid IDs before sending: %j', async (id) => {
     const fetchImpl = vi.fn()
-    await expect(client(fetchImpl).retrieve(id)).rejects.toThrow(TapayaValidationError)
+    await expect(client(fetchImpl).get(id)).rejects.toThrow(TapayaValidationError)
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('returns the session as sent, even with a different ID', async () => {
     const body = { ...created, id: 'CS_Y7U2D' }
-    await expect(client(vi.fn().mockResolvedValue(response(200, body))).retrieve(created.id))
+    await expect(client(vi.fn().mockResolvedValue(response(200, body))).get(created.id))
       .resolves.toEqual({ ...session, id: 'CS_Y7U2D' })
   })
 
   it('encodes the session ID', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, { ...created, id: 'cs/a b' }))
-    await client(fetchImpl).retrieve('cs/a b')
+    await client(fetchImpl).get('cs/a b')
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.sandbox.tapaya.com/merchant/checkout-sessions/cs%2Fa%20b')
   })
 })
 
 describe('responses', () => {
-  it.each(['create', 'retrieve'] as const)('validates required fields on %s', async (method) => {
+  it.each(['create', 'get'] as const)('validates required fields on %s', async (method) => {
     for (const field of ['id', 'merchantOrderId', 'url', 'status', 'paymentStatus', 'amount', 'currency', 'expiresAt', 'createdAt']) {
       const body: Record<string, unknown> = { ...created }
       delete body[field]
       const sessions = client(vi.fn().mockResolvedValue(response(200, body)))
-      await expect(method === 'create' ? sessions.create(params) : sessions.retrieve(created.id))
+      await expect(method === 'create' ? sessions.create(params) : sessions.get(created.id))
         .rejects.toMatchObject({ name: 'TapayaResponseError', status: 200 })
     }
   })
@@ -390,7 +390,7 @@ describe('responses', () => {
     { currency: 978 }, { createdAt: 0 }, { items: null }, { items: [{ ...item, quantity: '1' }] },
   ])('rejects fields of the wrong type: %j', async (override) => {
     const sessions = client(vi.fn().mockResolvedValue(response(200, { ...created, ...override })))
-    await expect(sessions.retrieve(created.id)).rejects.toBeInstanceOf(TapayaResponseError)
+    await expect(sessions.get(created.id)).rejects.toBeInstanceOf(TapayaResponseError)
   })
 
   it('accepts new status values and loose response data', async () => {
@@ -400,7 +400,7 @@ describe('responses', () => {
       merchantOrderId: '', createdAt: 'not a timestamp',
     }
     const fetchImpl = vi.fn().mockResolvedValue(response(200, { ...body, items: [{ ...looseItem, extra: true }] }))
-    await expect(client(fetchImpl).retrieve(created.id)).resolves.toStrictEqual({ ...session, ...body, items: [looseItem] })
+    await expect(client(fetchImpl).get(created.id)).resolves.toStrictEqual({ ...session, ...body, items: [looseItem] })
   })
 
   it.each([
@@ -444,7 +444,7 @@ describe('errors', () => {
 
   it('exposes response headers', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(404, { message: 'Not found' }, { 'x-trace': 'abc' }))
-    const error = await client(fetchImpl).retrieve(created.id).catch((error: unknown) => error)
+    const error = await client(fetchImpl).get(created.id).catch((error: unknown) => error)
     expect(error).toBeInstanceOf(TapayaNotFoundError)
     expect((error as TapayaApiError).headers.get('x-trace')).toBe('abc')
   })
@@ -460,7 +460,7 @@ describe('errors', () => {
   it('exposes backend field errors', async () => {
     const errors = [{ field: 'amount', message: 'Invalid amount', code: 'range' }, { field: 'currency', message: 'Unsupported' }]
     const body = { message: 'Validation failed', errorCode: 'ApiValidationViolated', errors: [...errors, 'junk', { field: 1 }] }
-    await expect(client(vi.fn().mockResolvedValue(response(400, body))).retrieve(created.id))
+    await expect(client(vi.fn().mockResolvedValue(response(400, body))).get(created.id))
       .rejects.toMatchObject({ name: 'TapayaInvalidRequestError', fieldErrors: errors })
   })
 
@@ -490,30 +490,30 @@ describe('errors', () => {
     [418, 'Tapaya request failed (418)'],
   ] as const)('describes HTTP %s when the response has no message', async (status, message) => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status }))
-    await expect(client(fetchImpl, { maxRetries: 0 }).retrieve(created.id)).rejects.toMatchObject({ status, message })
+    await expect(client(fetchImpl, { maxRetries: 0 }).get(created.id)).rejects.toMatchObject({ status, message })
   })
 
   it('exposes the request ID', async () => {
     const headers = { 'x-request-id': 'req_123' }
-    const apiError = client(vi.fn().mockResolvedValue(response(404, { message: 'Not found' }, headers))).retrieve(created.id)
+    const apiError = client(vi.fn().mockResolvedValue(response(404, { message: 'Not found' }, headers))).get(created.id)
     await expect(apiError).rejects.toMatchObject({ name: 'TapayaNotFoundError', requestId: 'req_123' })
-    const responseError = client(vi.fn().mockResolvedValue(response(200, { id: 'cs_Y7u2d' }, headers))).retrieve(created.id)
+    const responseError = client(vi.fn().mockResolvedValue(response(200, { id: 'cs_Y7u2d' }, headers))).get(created.id)
     await expect(responseError).rejects.toMatchObject({ name: 'TapayaResponseError', requestId: 'req_123' })
     const error = await responseError.catch((error: unknown) => error)
     expect((error as TapayaResponseError).headers.get('x-request-id')).toBe('req_123')
-    await expect(client(vi.fn().mockResolvedValue(response(404, {}))).retrieve(created.id))
+    await expect(client(vi.fn().mockResolvedValue(response(404, {}))).get(created.id))
       .rejects.toMatchObject({ requestId: undefined })
   })
 })
 
 describe('retries', () => {
-  it.each(['create', 'retrieve'] as const)('retries %s with backoff and the same request', async (method) => {
+  it.each(['create', 'get'] as const)('retries %s with backoff and the same request', async (method) => {
     const fetchImpl = vi.fn()
       .mockRejectedValueOnce(new TypeError('fetch failed'))
       .mockResolvedValueOnce(response(503, {}))
       .mockImplementation(async () => response(200, created))
     const sessions = client(fetchImpl)
-    const result = settle(method === 'create' ? sessions.create(params) : sessions.retrieve(created.id))
+    const result = settle(method === 'create' ? sessions.create(params) : sessions.get(created.id))
     await expect(result).resolves.toEqual(session)
     expect(fetchImpl).toHaveBeenCalledTimes(3)
     const [first, ...rest] = fetchImpl.mock.calls.map(([, init]) => init)
@@ -548,7 +548,7 @@ describe('retries', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response(429, {}, { 'retry-after': header }))
       .mockImplementation(async () => response(200, created))
-    const result = client(fetchImpl).retrieve(created.id)
+    const result = client(fetchImpl).get(created.id)
     if (delay > 0) {
       await vi.advanceTimersByTimeAsync(delay - 1)
       expect(fetchImpl).toHaveBeenCalledTimes(1)
@@ -561,7 +561,7 @@ describe('retries', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response(429, {}, { 'retry-after': '10' }))
       .mockImplementation(async () => response(200, created))
-    const result = client(fetchImpl).retrieve(created.id)
+    const result = client(fetchImpl).get(created.id)
     await vi.advanceTimersByTimeAsync(9_999)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
@@ -607,9 +607,9 @@ describe('retries', () => {
   it('lets each request override maxRetries', async () => {
     const fetchImpl = vi.fn().mockImplementation(async () => response(503, {}))
     const sessions = client(fetchImpl, { maxRetries: 0 })
-    await expect(sessions.retrieve(created.id)).rejects.toBeInstanceOf(TapayaServerError)
+    await expect(sessions.get(created.id)).rejects.toBeInstanceOf(TapayaServerError)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
-    await expect(settle(sessions.retrieve(created.id, { maxRetries: 1 }))).rejects.toBeInstanceOf(TapayaServerError)
+    await expect(settle(sessions.get(created.id, { maxRetries: 1 }))).rejects.toBeInstanceOf(TapayaServerError)
     expect(fetchImpl).toHaveBeenCalledTimes(3)
   })
 
@@ -673,7 +673,7 @@ describe('timeouts and cancellation', () => {
 
   it('throws TapayaTimeoutError after each attempt times out', async () => {
     const fetchImpl = hangingFetch()
-    const error = await settle(client(fetchImpl, { timeoutMs: 5, maxRetries: 1 }).retrieve(created.id))
+    const error = await settle(client(fetchImpl, { timeoutMs: 5, maxRetries: 1 }).get(created.id))
       .catch((error: unknown) => error)
     expect(error).toBeInstanceOf(TapayaTimeoutError)
     expect(error).toBeInstanceOf(TapayaConnectionError)
@@ -683,7 +683,7 @@ describe('timeouts and cancellation', () => {
 
   it('lets each request override the timeout', async () => {
     const fetchImpl = hangingFetch()
-    await expect(settle(client(fetchImpl, { maxRetries: 0 }).retrieve(created.id, { timeoutMs: 5 })))
+    await expect(settle(client(fetchImpl, { maxRetries: 0 }).get(created.id, { timeoutMs: 5 })))
       .rejects.toThrow('Tapaya request timed out after 5 ms')
   })
 
@@ -700,7 +700,7 @@ describe('timeouts and cancellation', () => {
   it('does not send a request when the signal is already aborted', async () => {
     const fetchImpl = vi.fn()
     const signal = AbortSignal.abort()
-    await expect(client(fetchImpl).retrieve(created.id, { signal })).rejects.toBe(signal.reason)
+    await expect(client(fetchImpl).get(created.id, { signal })).rejects.toBe(signal.reason)
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
