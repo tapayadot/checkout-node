@@ -37,10 +37,10 @@
   "packageManager": "pnpm@11.14.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tapayadot/checkout-sdk.git"
+    "url": "git+https://github.com/tapayadot/checkout-node.git"
   },
-  "homepage": "https://github.com/tapayadot/checkout-sdk#readme",
+  "homepage": "https://github.com/tapayadot/checkout-node#readme",
   "bugs": {
-    "url": "https://github.com/tapayadot/checkout-sdk/issues"
+    "url": "https://github.com/tapayadot/checkout-node/issues"
   }
 }
