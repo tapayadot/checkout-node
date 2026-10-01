@@ -1,6 +1,6 @@
 import { z } from 'zod/v4'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.1.1'
 
 const USER_AGENT = `tapaya-checkout-js/${VERSION}`
 const DEFAULT_TIMEOUT_MS = 30_000

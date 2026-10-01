@@ -1,6 +1,6 @@
 {
   "name": "@tapayadot/checkout",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Server-side SDK for Tapaya Checkout",
   "type": "module",
   "types": "./dist/index.d.ts",
