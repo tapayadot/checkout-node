@@ -1,7 +1,7 @@
 {
   "name": "@tapayadot/checkout",
-  "version": "0.1.1",
-  "description": "Server-side SDK for Tapaya Checkout",
+  "version": "0.2.0",
+  "description": "Tapaya Checkout SDK: server client, browser loader, and React hook",
   "type": "module",
   "types": "./dist/index.d.ts",
   "files": [
@@ -10,9 +10,27 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "node": "./dist/index.js",
+      "deno": "./dist/index.js",
+      "bun": "./dist/index.js",
+      "workerd": "./dist/index.js",
+      "edge-light": "./dist/index.js",
+      "worker": "./dist/index.js",
+      "browser": "./dist/browser.js",
       "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./react": {
+      "types": "./dist/client/react.d.ts",
+      "import": "./dist/client/react.js"
     }
   },
+  "sideEffects": [
+    "./dist/browser.js"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
@@ -22,8 +40,21 @@
   "dependencies": {
     "zod": "4.6.5"
   },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@testing-library/react": "16.3.2",
     "@types/node": "26.6.2",
+    "@types/react": "19.2.0",
+    "jsdom": "30.0.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   },

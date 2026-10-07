@@ -105,7 +105,11 @@ jobs:
           const entries = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n').sort()
           assert.deepEqual(entries, [
             'package/LICENSE', 'package/README.md', 'package/dist/index.d.ts',
-            'package/dist/index.js', 'package/package.json',
+            'package/dist/index.js', 'package/dist/browser.d.ts', 'package/dist/browser.js',
+            ...['errors', 'index', 'react', 'types', 'version'].flatMap(name => [
+              `package/dist/client/${name}.d.ts`, `package/dist/client/${name}.js`,
+            ]),
+            'package/package.json',
           ].sort(), 'Unexpected files in release artifact')
           const metadata = execFileSync('tar', ['-tvzf', archive], { encoding: 'utf8' }).trim().split('\n')
           assert.ok(metadata.every(entry => entry.startsWith('-')), 'Release artifact must contain only regular files')

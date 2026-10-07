@@ -15,7 +15,7 @@ const verifier = match[1].replace(/^ {10}/gm, '')
 
 const manifest = {
   name: '@tapayadot/checkout',
-  version: '0.1.0',
+  version: '0.2.0',
   repository: { url: 'git+https://github.com/tapayadot/checkout-node.git' },
   publishConfig: { access: 'public' },
   dependencies: { zod: '4.6.5' },
@@ -26,12 +26,18 @@ function verify(t, change = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tapaya-release-check-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const fixture = path.join(root, 'fixture')
-  fs.mkdirSync(path.join(fixture, 'package/dist'), { recursive: true })
+  fs.mkdirSync(path.join(fixture, 'package/dist/client'), { recursive: true })
   const files = {
     'package/LICENSE': 'License',
     'package/README.md': 'Readme',
     'package/dist/index.d.ts': 'export {}',
     'package/dist/index.js': 'throw new Error("Artifact code must not execute")',
+    'package/dist/browser.d.ts': 'export {}',
+    'package/dist/browser.js': 'throw new Error("Artifact code must not execute")',
+    ...Object.fromEntries(['errors', 'index', 'react', 'types', 'version'].flatMap((name) => [
+      [`package/dist/client/${name}.d.ts`, 'export {}'],
+      [`package/dist/client/${name}.js`, 'throw new Error("Artifact code must not execute")'],
+    ])),
     'package/package.json': JSON.stringify({ ...manifest, ...change.manifest }),
     ...change.files,
   }
@@ -63,7 +69,7 @@ test('accept a valid artifact without executing its JavaScript', (t) => {
 for (const [name, change, message] of [
   ['a substituted artifact', { digest: '0'.repeat(64) }, 'Release artifact digest mismatch'],
   ['a different package', { manifest: { name: '@other/package' } }, '@tapayadot/checkout'],
-  ['a different version', { manifest: { version: '0.1.1' } }, '0.1.0'],
+  ['a different version', { manifest: { version: '0.1.1' } }, manifest.version],
   ['an install script', { manifest: { scripts: { postinstall: 'echo unexpected' } } }, 'Unexpected package script'],
   ['an unpinned dependency', { manifest: { dependencies: { zod: '^4.6.5' } } }, 'Runtime dependencies must use exact versions'],
   ['a registry override', { manifest: { publishConfig: { access: 'public', registry: 'https://other.example' } } }, 'registry'],
