@@ -54,7 +54,7 @@ const created = {
   status: 'open', paymentStatus: 'unpaid', amount: 120, currency: 'EUR',
   expiresAt: '2026-09-05T19:00:00Z', createdAt: '2026-09-05T18:30:00Z',
 } as const
-const session: CheckoutSession = { ...created, taxBreakdown: [], taxRate: null, items: [], paymentReference: null, completedAt: null }
+const session: CheckoutSession = { ...created, mode: 'hosted', taxBreakdown: [], taxRate: null, items: [], paymentReference: null, completedAt: null }
 
 beforeEach(() => {
   vi.stubEnv('TAPAYA_ENVIRONMENT', undefined)
@@ -223,7 +223,7 @@ describe('checkout.sessions.create', () => {
 
   it('preserves explicit nulls in every optional field', async () => {
     const nullableParams: CreateCheckoutSessionParams = {
-      amount: 120, currency: 'EUR', merchantOrderId: null, locale: null,
+      amount: 120, currency: 'EUR', merchantOrderId: 'order-1', locale: null,
       successUrl: null, cancelUrl: null, items: null, tax: null, shipping: null,
       taxRate: null, taxBreakdown: null,
       customer: { email: null, billingAddress: { name: null, country: null }, shippingAddress: null },
@@ -235,12 +235,13 @@ describe('checkout.sessions.create', () => {
 
   it('omits optional fields when absent', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
-    await client(fetchImpl).create({ amount: 120, currency: 'EUR' })
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ amount: 120, currency: 'EUR' })
+    await client(fetchImpl).create({ merchantOrderId: 'order-1', amount: 120, currency: 'EUR' })
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ merchantOrderId: 'order-1', amount: 120, currency: 'EUR' })
   })
 
   it.each([
-    [{ amount: 0 }, 'amount'], [{ amount: 1.5 }, 'amount'], [{ amount: 2_147_483_648 }, 'amount'],
+    [{ merchantOrderId: undefined }, 'merchantOrderId'], [{ merchantOrderId: ' ' }, 'merchantOrderId'],
+    [{ merchantOrderId: 'x'.repeat(201) }, 'merchantOrderId'], [{ amount: 0 }, 'amount'], [{ amount: 1.5 }, 'amount'], [{ amount: 2_147_483_648 }, 'amount'],
     [{ amount: '120' }, 'amount'], [{ tax: -1 }, 'tax'], [{ tax: NaN }, 'tax'],
     [{ currency: 'EU' }, 'currency'], [{ currency: 'EURO' }, 'currency'], [{ currency: 978 }, 'currency'],
     [{ shipping: 0.5 }, 'shipping'], [{ taxRate: -1 }, 'taxRate'], [{ locale: 1 }, 'locale'],
@@ -265,7 +266,7 @@ describe('checkout.sessions.create', () => {
 
   it('leaves business rules to the API and sends input as given', async () => {
     const lenient: CreateCheckoutSessionParams = {
-      amount: 120, currency: 'eur',
+      merchantOrderId: 'order-1', amount: 120, currency: 'eur',
       items: [{ ...item, reference: '', name: '', imageUrl: '/relative.png' }],
       customer: {
         email: ' not-an-email ',
