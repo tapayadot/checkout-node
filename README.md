@@ -1,16 +1,24 @@
-# Tapaya Checkout SDK
+![Tapaya Checkout SDK](banner-github.png)
+
+![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-green) ![TypeScript](https://img.shields.io/badge/TypeScript-supported-blue) [![npm](https://img.shields.io/npm/v/%40tapayadot%2Fcheckout)](https://www.npmjs.com/package/@tapayadot/checkout) [![Docs](https://img.shields.io/badge/docs-tapaya.com-blue)](https://docs.tapaya.com/online) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.2.0.
 Create a Checkout session for an order, redirect the customer to the Tapaya-hosted payment page, and verify the
 payment on your server before fulfilling the order. For embedded card fields, the same package provides the browser
 SDK (`@tapayadot/checkout/client`) and a React hook (`@tapayadot/checkout/react`).
 
-The server client requires Node.js 22.13 or newer. It uses only standard Web APIs (`fetch`, Web Crypto, and `AbortSignal`) and
-does not import Node.js modules.
+## Installation
 
 ```sh
 npm install @tapayadot/checkout
 ```
+
+## Requirements
+
+- Node.js 22.13 or newer for the server client.
+- React 18 or newer if you use `@tapayadot/checkout/react`.
+
+For setup and integration guides, see the [documentation](#documentation).
 
 ## Upgrade from 0.1.x
 
@@ -613,15 +621,24 @@ the Popover API (before Chrome 114, Safari 17 and Firefox 125) fall back to
 `position: fixed`; there, avoid mounting the frame inside an element with
 `transform`, `filter` or `contain`.
 
-## More information
+## Documentation
+
+Full documentation is available at [docs.tapaya.com](https://docs.tapaya.com).
 
 - [Online Payments](https://docs.tapaya.com/online): overview and guides
+- [Quick Start Guide](https://docs.tapaya.com/online/getting-started/quick_start_guide): Checkout settings,
+  return URLs, and your first payment
+- [Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout): create a session, redirect the
+  customer, and verify payment
 - [API Integration](https://docs.tapaya.com/online/integration/api_integration): request fields, payment states, and
   idempotency rules
 - [Checkout Security](https://docs.tapaya.com/online/security/checkout_security): key handling and payment
   verification
-- Questions and feature requests: [developers@tapaya.com](mailto:developers@tapaya.com)
+
+## Support
+
+For questions and feature requests, contact [developers@tapaya.com](mailto:developers@tapaya.com).
 
 ## License
 
-[Apache-2.0](LICENSE)
+Licensed under the [Apache License, Version 2.0](LICENSE).
