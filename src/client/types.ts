@@ -71,6 +71,8 @@ export type PaymentLabels = {
   cardInvalid: string
   /** Shown when the card fields cannot load. Nothing has been charged. */
   unavailable: string
+  /** Shown when the wallet passed as `paymentMethod` cannot be used. Card entry stays hidden. */
+  walletUnavailable: string
   loading: string
   preparing: string
   tokenizing: string
@@ -158,7 +160,11 @@ export type PrepareSource = string | (() => Promise<string | PreparedPayment>)
 export type ClientSecretSource = string | (() => Promise<string | PreparedPayment>)
 
 export type PaymentOptions = {
-  /** Render only this method when the merchant owns the payment selector. */
+  /**
+   * Render only this method when the merchant owns the payment selector. An unavailable wallet
+   * shows an error instead of card entry and reports `wallet_unavailable` in `snapshot.error`
+   * while another payment is safe to start.
+   */
   paymentMethod?: 'card' | 'apple_pay' | 'google_pay'
   /** Show available wallets for this total, in minor units. Omit or pass null to keep card entry only. */
   wallets?: WalletOptions | null

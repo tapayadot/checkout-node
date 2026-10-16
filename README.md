@@ -574,8 +574,12 @@ order once your server has reserved it, including after a decline.
 Pass `wallets` with the checkout total in minor units. Tapaya shows available
 wallets as separate payment options. Unsupported or disabled wallets stay hidden.
 If your checkout owns the selector, pass `paymentMethod: 'card'`, `'google_pay'`,
-or `'apple_pay'` to render only that method. An unavailable wallet explains the
-problem and falls back to card entry.
+or `'apple_pay'` to render only that method. If that wallet is unavailable, for
+example on an unsupported browser or before the merchant enables it, the frame
+shows the `walletUnavailable` label instead of card entry, and `snapshot.error`
+reports `{ code: 'wallet_unavailable' }`. Offer the shopper another method in
+your selector. The error appears only while another payment is safe to start:
+a successful, pending or uncertain payment shows its own status instead.
 
 ```ts
 const payment = payments.createPayment({
