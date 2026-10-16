@@ -108,6 +108,15 @@ describe("server payment client", () => {
 
 
 describe("embedded payment safety", () => {
+  it.each([
+    ['test', 'development'], ['live', 'production'],
+  ])('accepts %s publishable keys and provider mode', async (mode, environment) => {
+    const publishableKey = `pk_${mode}_${'c'.repeat(32)}`;
+    const client = new TapayaPayments('merchant-secret', {
+      fetch: vi.fn().mockResolvedValue(Response.json({ publishableKey, environment })),
+    });
+    expect(await client.configuration()).toMatchObject({ publishableKey, environment });
+  });
   it.each([".", "..", "", " ", "a".repeat(201), null, undefined])("rejects unsafe payment ID %j before sending authentication", async (id) => {
     const fetcher = vi.fn();
     const client = new TapayaPayments("merchant-secret", { fetch: fetcher });

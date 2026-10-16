@@ -47,6 +47,8 @@ export type PaymentState =
 export type PaymentOutcome = 'open' | 'pending' | 'completed' | 'ended'
 
 export type PaymentSnapshot = {
+  /** Selected payment option. Wallets are authorized with their own branded button. */
+  paymentMethod?: 'card' | 'apple_pay' | 'google_pay'
   state: PaymentState
   outcome: PaymentOutcome
   busy: boolean
@@ -156,6 +158,12 @@ export type PrepareSource = string | (() => Promise<string | PreparedPayment>)
 export type ClientSecretSource = string | (() => Promise<string | PreparedPayment>)
 
 export type PaymentOptions = {
+  /** Render only this method when the merchant owns the payment selector. */
+  paymentMethod?: 'card' | 'apple_pay' | 'google_pay'
+  /** Show available wallets for this total, in minor units. Omit or pass null to keep card entry only. */
+  wallets?: WalletOptions | null
+  /** Validate your checkout and reserve its payment when a wallet is clicked, never on mount. */
+  onWalletClick?: () => Promise<string | PreparedPayment>
   /**
    * Your endpoint that returns the order's payment. Called when the fields mount, to resume a
    * payment after a reload, and on each submission, to get the next attempt after a decline.
@@ -171,6 +179,13 @@ export type PaymentOptions = {
 }
 
 export type SubmitOptions = { clientSecret?: ClientSecretSource }
+
+export type WalletOptions = {
+  amount: number
+  currency: string
+  /** Keep the branded button visible but prevent opening the wallet until checkout is valid. */
+  disabled?: boolean
+}
 
 /** A same-origin payment endpoint, or an existing secret/custom request. */
 export type SubmitInput = string | SubmitOptions
@@ -196,7 +211,7 @@ export interface Payment {
    * Restyle the mounted fields without clearing them, for example at a breakpoint.
    * Text colors, font and size are fixed once the fields mount.
    */
-  update(options: { appearance?: Appearance }): void
+  update(options: { appearance?: Appearance; wallets?: WalletOptions | null }): void
   /** Remove the frame. Does not cancel an accepted payment or issuer challenge. */
   destroy(): void
 }

@@ -569,6 +569,56 @@ selected; it keeps what the shopper typed. Lock the selector while
 `snapshot.busy` is true or the state is `pending` or `action_required`. Lock the
 order once your server has reserved it, including after a decline.
 
+### Add Apple Pay and Google Pay
+
+Pass `wallets` with the checkout total in minor units. Tapaya shows available
+wallets as separate payment options. Unsupported or disabled wallets stay hidden.
+If your checkout owns the selector, pass `paymentMethod: 'card'`, `'google_pay'`,
+or `'apple_pay'` to render only that method. An unavailable wallet explains the
+problem and falls back to card entry.
+
+```ts
+const payment = payments.createPayment({
+  wallets: { amount: 2450, currency: 'EUR' },
+  onWalletClick: async () => {
+    if (!form.reportValidity()) throw new Error('Complete the checkout details.')
+    // Validate the cart and reserve the order on your server.
+    const response = await fetch('/api/payment', { method: 'POST' })
+    if (!response.ok) throw new Error('Could not reserve the payment.')
+    return response.json() // { clientSecret, status }
+  },
+})
+await payment.mount('#payment')
+```
+
+`onWalletClick` runs when the shopper clicks the branded wallet button, never when
+they select a payment option or the fields mount.
+Without this callback, wallets use the existing `prepare` or `clientSecret` option.
+The React `usePayment` hook accepts the same options and reads the latest callback.
+
+Pass `wallets: { amount, currency, disabled: true }` until your checkout details
+are valid. Update `disabled` to `false` to enable the branded wallet button without
+remounting it.
+
+When shipping or discounts change, call
+`payment.update({ wallets: { amount: 2450, currency: 'EUR' } })`.
+Pass `wallets: null` to hide the buttons until the total is ready.
+The React hook updates the total when its `wallets` option changes.
+Tapaya refuses to confirm if the reserved payment differs from the wallet total.
+
+`snapshot.paymentMethod` identifies the selected method. Show your card submit
+button only for `card`; wallets require their own branded button.
+
+Wallet results use the same `snapshot`, recovery, and confirmation-page flow as cards.
+Closing a wallet sheet does not charge the payment. Keep the checkout available.
+An uncertain confirmation stays pending and blocks another charge.
+
+Enable wallets in the merchant's checkout settings. For Apple Pay, host the
+verification file and register the shop domain through the platform API.
+Production Google Pay requires an active Google Pay merchant.
+The SDK sets `allow="payment"` on its frame. If you embed the shop in another frame,
+that outer frame must also allow payment. Cross-origin Apple Pay requires Safari 17 or later.
+
 ### Customize
 
 `appearance.variables` themes the frame so the fields can match your own inputs.
@@ -614,7 +664,10 @@ frame-src https://js.tapaya.com
 ```
 
 The provider's scripts, the issuer challenge, and all payment API calls run inside
-the frame under Tapaya's own policy. During 3-D Secure the frame temporarily covers the viewport. It uses the browser's
+the frame under Tapaya's own policy. During 3-D Secure the frame temporarily covers the viewport.
+The original payment controls stay visible but dimmed and inert behind the issuer
+challenge. A placeholder preserves the checkout layout, and the secure fields are
+restored without being recreated. It uses the browser's
 top layer (the Popover API), so it appears above your header, sticky elements and
 any stacking context, and nothing on your page needs a z-index. Browsers without
 the Popover API (before Chrome 114, Safari 17 and Firefox 125) fall back to

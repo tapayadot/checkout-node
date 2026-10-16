@@ -855,7 +855,7 @@ export type MerchantPayment = {
 export type PaymentConfiguration = {
   /** Safe to expose in the browser. */
   publishableKey: string
-  environment: 'development'
+  environment: 'development' | 'production'
   /** Origin of the Tapaya API this server talks to. Pass it to the browser loader as `apiOrigin`. */
   apiOrigin: string
 }
@@ -927,8 +927,8 @@ export class TapayaPayments {
   async configuration(options: PaymentRequestOptions = {}): Promise<PaymentConfiguration> {
     const response = await this.#request('/configuration', options)
     const result = z.object({
-      publishableKey: z.string().regex(/^pk_dev_[0-9a-f]{32}$/),
-      environment: z.literal('development'),
+      publishableKey: z.string().regex(/^pk_(dev|test|live)_[0-9a-f]{32}$/),
+      environment: z.enum(['development', 'production']),
     }).safeParse(response.body)
     if (!result.success) throw this.#responseError(response, 'Invalid payment configuration')
     return { ...result.data, apiOrigin: new URL(this.#baseUrl).origin }

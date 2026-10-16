@@ -4,7 +4,7 @@ import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { usePayment } from './react.js'
 import { loadTapaya } from './index.js'
-import type { Payment, PaymentOptions, PaymentSnapshot } from './types.js'
+import type { Payment, PaymentOptions, PaymentSnapshot, WalletOptions } from './types.js'
 
 vi.mock('./index.js', async (original) => ({
   ...(await original<typeof import('./index.js')>()),
@@ -69,6 +69,42 @@ beforeEach(() => {
   })
 })
 afterEach(cleanup)
+
+it('updates wallet totals without remounting and uses the latest checkout callback', async () => {
+  const first = vi.fn().mockResolvedValue('first')
+  const second = vi.fn().mockResolvedValue('second')
+  function WalletCheckout({ amount, onClick }: { amount: number; onClick: () => Promise<string> }) {
+    hook = usePayment({ publishableKey: KEY, wallets: { amount, currency: 'EUR' }, onWalletClick: onClick })
+    return createElement('div', { ref: hook.fieldRef })
+  }
+  const view = render(createElement(WalletCheckout, { amount: 1200, onClick: first }))
+  await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
+  const mounts = created.length
+  expect(first).not.toHaveBeenCalled()
+  view.rerender(createElement(WalletCheckout, { amount: 2450, onClick: second }))
+  await act(async () => {})
+  expect(created).toHaveLength(mounts)
+  expect(update).toHaveBeenCalledWith({ wallets: { amount: 2450, currency: 'EUR' } })
+  expect(await created.at(-1)!.onWalletClick!()).toBe('second')
+  expect(first).not.toHaveBeenCalled()
+})
+
+it('accepts null wallet totals and hides wallets without remounting', async () => {
+  function WalletCheckout({ wallets }: { wallets: WalletOptions | null }) {
+    hook = usePayment({ publishableKey: KEY, wallets })
+    return createElement('div', { ref: hook.fieldRef })
+  }
+  const view = render(createElement(WalletCheckout, { wallets: null }))
+  await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
+  expect(created[0].wallets).toBeNull()
+  const mounts = created.length
+  view.rerender(createElement(WalletCheckout, { wallets: { amount: 1200, currency: 'EUR' } }))
+  expect(update).toHaveBeenLastCalledWith({ wallets: { amount: 1200, currency: 'EUR' } })
+  view.rerender(createElement(WalletCheckout, { wallets: null }))
+  expect(update).toHaveBeenLastCalledWith({ wallets: null })
+  expect(created).toHaveLength(mounts)
+  expect(destroy).not.toHaveBeenCalled()
+})
 
 it('does not remount when inline labels and appearance keep their values', async () => {
   const view = render(createElement(StrictMode, null, createElement(Checkout, { label: 'Name' })))
@@ -171,4 +207,16 @@ it('reports a load failure in the snapshot', async () => {
       error: { code: 'unavailable', message: expect.stringContaining("Card payment isn't available") },
     }),
   )
+})
+
+it('forwards the method chosen by the merchant selector', async () => {
+  function Selected({ paymentMethod }: { paymentMethod: 'card' | 'google_pay' }) {
+    hook = usePayment({ publishableKey: KEY, paymentMethod })
+    return createElement('div', { ref: hook.fieldRef })
+  }
+  const view = render(createElement(Selected, { paymentMethod: 'google_pay' }))
+  await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
+  expect(created[0].paymentMethod).toBe('google_pay')
+  view.rerender(createElement(Selected, { paymentMethod: 'card' }))
+  await waitFor(() => expect(created.at(-1)?.paymentMethod).toBe('card'))
 })
