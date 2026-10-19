@@ -38,6 +38,8 @@ export function usePayment(options: UsePaymentOptions | null) {
   const appearance = JSON.stringify(options?.appearance ?? null)
   // The provider places the brand icon only when its fields mount.
   const cardBrandIcon = options?.appearance?.cardBrandIcon
+  const paymentMethod = options?.paymentMethod
+  const hasWalletClick = options?.onWalletClick !== undefined
   const prepareEndpoint = typeof options?.prepare === 'string' ? options.prepare : undefined
   const activeSecret = useRef<{ identity: string; value: string } | null>(null)
   const [presentation, setPresentation] = useState({
@@ -45,17 +47,20 @@ export function usePayment(options: UsePaymentOptions | null) {
     labels,
     cardBrandIcon,
     prepareEndpoint,
+    paymentMethod,
+    hasWalletClick,
   })
+  // Switching methods changes the fields, but still pays the same reserved order.
   const identity = JSON.stringify([publishableKey, origin, apiOrigin, presentation.prepareEndpoint])
   useEffect(() => {
     // Never remove a frame while it is tokenizing, challenging or confirming.
     if (snapshot.busy) return
     setPresentation((current) =>
-      current.locale === locale && current.labels === labels && current.cardBrandIcon === cardBrandIcon && current.prepareEndpoint === prepareEndpoint
+      current.locale === locale && current.labels === labels && current.cardBrandIcon === cardBrandIcon && current.prepareEndpoint === prepareEndpoint && current.paymentMethod === paymentMethod && current.hasWalletClick === hasWalletClick
         ? current
-        : { locale, labels, cardBrandIcon, prepareEndpoint },
+        : { locale, labels, cardBrandIcon, prepareEndpoint, paymentMethod, hasWalletClick },
     )
-  }, [locale, labels, cardBrandIcon, prepareEndpoint, snapshot.busy])
+  }, [locale, labels, cardBrandIcon, prepareEndpoint, paymentMethod, hasWalletClick, snapshot.busy])
 
   useEffect(() => {
     if (!publishableKey) {
@@ -68,6 +73,8 @@ export function usePayment(options: UsePaymentOptions | null) {
     // When options arrive after an async lookup, wait for their presentation too.
     // Mounting once with the old labels would immediately remount and replay results.
     if (
+      presentation.hasWalletClick !== (latest.current?.onWalletClick !== undefined) ||
+      presentation.paymentMethod !== latest.current?.paymentMethod ||
       presentation.locale !== latest.current?.locale ||
       presentation.labels !== JSON.stringify(latest.current?.labels ?? null) ||
       presentation.cardBrandIcon !== latest.current?.appearance?.cardBrandIcon ||
@@ -108,9 +115,19 @@ export function usePayment(options: UsePaymentOptions | null) {
                       throw new PaymentError('configuration', 'The prepare option was removed.')
                     return prepare()
                   },
+          paymentMethod: presentation.paymentMethod,
           locale: presentation.locale,
           labels: JSON.parse(presentation.labels) ?? undefined,
           appearance: latest.current?.appearance,
+          wallets: latest.current?.wallets,
+          onWalletClick: presentation.hasWalletClick
+            ? async () => {
+                const onWalletClick = latest.current?.onWalletClick
+                if (!onWalletClick)
+                  throw new PaymentError('configuration', 'The onWalletClick option was removed.')
+                return onWalletClick()
+              }
+            : undefined,
           onChange: (value) => {
             if (!active) return
             if (payment?.clientSecret) activeSecret.current = { identity, value: payment.clientSecret }
@@ -134,6 +151,10 @@ export function usePayment(options: UsePaymentOptions | null) {
   useEffect(() => {
     if (appearance !== 'null') component.current?.update({ appearance: JSON.parse(appearance) })
   }, [appearance])
+  const wallets = JSON.stringify(options?.wallets ?? null)
+  useEffect(() => {
+    component.current?.update({ wallets: JSON.parse(wallets) })
+  }, [wallets, snapshot.state === 'loading'])
 
   const submit = useCallback((submitOptions?: SubmitInput) => {
     if (!component.current) return Promise.reject(new PaymentError('not_mounted', 'Mount the payment fields first.'))

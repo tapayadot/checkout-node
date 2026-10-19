@@ -15,7 +15,7 @@ const verifier = match[1].replace(/^ {10}/gm, '')
 
 const manifest = {
   name: '@tapayadot/checkout',
-  version: '0.2.0',
+  version: '0.3.0',
   repository: { url: 'git+https://github.com/tapayadot/checkout-node.git' },
   publishConfig: { access: 'public' },
   dependencies: { zod: '4.6.5' },
