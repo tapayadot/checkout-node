@@ -1,4 +1,4 @@
-![Tapaya Checkout SDK](banner-github.png)
+![Tapaya Checkout SDK](banner-github-checkout.png)
 
 ![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-green) ![TypeScript](https://img.shields.io/badge/TypeScript-supported-blue) [![npm](https://img.shields.io/npm/v/%40tapayadot%2Fcheckout)](https://www.npmjs.com/package/@tapayadot/checkout) [![Docs](https://img.shields.io/badge/docs-tapaya.com-blue)](https://docs.tapaya.com/online) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
