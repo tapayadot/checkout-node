@@ -2,7 +2,7 @@
 
 ![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-green) ![TypeScript](https://img.shields.io/badge/TypeScript-supported-blue) [![npm](https://img.shields.io/npm/v/%40tapayadot%2Fcheckout)](https://www.npmjs.com/package/@tapayadot/checkout) [![Docs](https://img.shields.io/badge/docs-tapaya.com-blue)](https://docs.tapaya.com/online) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.2.0.
+TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.3.0.
 Create a Checkout session for an order, redirect the customer to the Tapaya-hosted payment page, and verify the
 payment on your server before fulfilling the order. For embedded card fields, the same package provides the browser
 SDK (`@tapayadot/checkout/client`) and a React hook (`@tapayadot/checkout/react`).
@@ -20,6 +20,17 @@ npm install @tapayadot/checkout
 
 For setup and integration guides, see the [documentation](#documentation).
 
+## Upgrade from 0.2.x
+
+- The browser loader now loads Tapaya.js 0.2.0, which adds Apple Pay and Google Pay. It refuses an
+  already loaded Tapaya.js 0.1.x. If your page includes the script tag itself, change it to
+  `/checkout/0.2.0/checkout.js`.
+- `environment: 'production'` now runs embedded checkout against `https://api.tapaya.com` instead
+  of throwing. `configuration()` returns `environment: 'production'` with live keys.
+- Without `environment` or `TAPAYA_ENVIRONMENT`, a `tapaya_live_` key now selects production. A live key
+  set up for sandbox, or a test key for production, throws when the client is created
+  instead of failing each request with 401. `baseUrl` still overrides both.
+
 ## Upgrade from 0.1.x
 
 - Set `merchantOrderId` on every hosted session creation. It is now required, must contain
@@ -33,9 +44,9 @@ For setup and integration guides, see the [documentation](#documentation).
 - Import browser code from `@tapayadot/checkout/client` and the React hook from
   `@tapayadot/checkout/react`. The root entry is for server code.
 
-The browser loader targets Tapaya.js at `/checkout/0.1.0/checkout.js` on
+The browser loader targets Tapaya.js at `/checkout/0.2.0/checkout.js` on
 `https://js.tapaya.com`. Its version does not follow this package's server releases.
-Set `origin` to your local Tapaya.js server for local development.
+Set `origin` to your local Tapaya.js server for local testing.
 
 ## Quick start
 
@@ -111,14 +122,17 @@ const tapaya = new Tapaya(apiKey, {
 |---|---|---|
 | `apiKey` (first argument) | `TAPAYA_SECRET_KEY` | A merchant checkout key, or the organization Secret key in platform mode. |
 | `merchantToken` | None | Merchant token, sent as `X-Tapaya-Merchant-Token`. Required in platform mode. |
-| `environment` | `TAPAYA_ENVIRONMENT`, then `sandbox` | `development` (`https://api.dev.tapaya.com`), `sandbox` (`https://api.sandbox.tapaya.com`), or `production` (`https://api.tapaya.com`). Checkout is not available in production yet. |
-| `baseUrl` | Set by `environment` | Overrides the API URL for hosted and embedded calls. |
+| `environment` | `TAPAYA_ENVIRONMENT`, then `production` for a `tapaya_live_` key and `sandbox` otherwise | `sandbox` (`https://api.sandbox.tapaya.com`) or `production` (`https://api.tapaya.com`). A `tapaya_live_` key outside production, or a `tapaya_test_` key in production, throws. |
+| `baseUrl` | `TAPAYA_BASE_URL`, then the URL selected by `environment` | Overrides the API URL for hosted and embedded calls. |
 | `timeoutMs` | `30000` | Timeout for each attempt, in milliseconds. |
 | `maxRetries` | `2` | Retries after a network error, a timeout, HTTP 429, 502, 503, or 504, or a create still in progress. |
 | `fetch` | Global `fetch` | Custom `fetch` implementation, for example to add a proxy or instrumentation. |
 | `embedded` | Same API as hosted, 35,000 ms timeout | Overrides `{ baseUrl, fetch, timeoutMs }` for embedded checkout. Top-level values apply to both flows unless overridden here. |
 
-The client resolves the API key and API environment once, when it is constructed. Use a key that matches the
+To use a custom API endpoint, set `TAPAYA_BASE_URL=https://api.example.com` on your server.
+An explicit `baseUrl` takes precedence over `TAPAYA_BASE_URL`; both override environment selection.
+
+The client resolves the API key and API URL once, when it is constructed. Use a key that matches the
 selected environment. API, return, and hosted checkout URLs must use HTTPS, except that HTTP is allowed for
 `localhost`, `127.0.0.1`, and `[::1]` outside `NODE_ENV=production`. The SDK checks the current `NODE_ENV` each
 time it validates a local HTTP URL.
@@ -303,9 +317,9 @@ Embedded checkout requires version 0.2.0 or newer.
 
 Both checkout experiences use `Tapaya.checkout.sessions`. Embedded checkout uses the
 [browser card fields](#browser-card-fields) from this package. Your server needs two calls: `prepare` before the shopper pays, and `verify`
-before you fulfill. Embedded calls use the same `environment` or `baseUrl` as hosted calls, so they default to
-`https://api.sandbox.tapaya.com`. Embedded checkout supports test card payments in development and sandbox.
-The SDK rejects embedded calls in production. Keep the key on your server.
+before you fulfill. Embedded calls use the same API as hosted calls, chosen by `baseUrl`, `environment`, or the
+key (see [Configuration](#configuration)). Sandbox accepts test cards; `production`
+(`https://api.tapaya.com`) charges real cards. Keep the key on your server.
 
 ```ts
 import { Tapaya } from '@tapayadot/checkout'
@@ -362,7 +376,8 @@ decline. Keep diagnostics on your server and show your own shopper-facing text.
 
 `prepare` and `verify` cover most integrations. These methods remain available:
 
-- `tapaya.checkout.configuration()` returns `{ publishableKey, environment: 'development', apiOrigin }`. See
+- `tapaya.checkout.configuration()` returns `{ publishableKey, environment, apiOrigin }` for the browser SDK.
+  `environment` is `'sandbox'` for test payments and `'production'` for live payments. See
   [Mount the card fields](#mount-the-card-fields).
 - `sessions.create({ mode: 'embedded', ...order }, { idempotencyKey })` creates one attempt with your own key.
 - `sessions.retrieve(id, { mode: 'embedded' })` and `sessions.findByOrder(merchantOrderId)` read a session
@@ -391,7 +406,7 @@ const current = await tapaya.checkout.sessions.retrieve(session.id, {
 ```
 
 The endpoint must use HTTPS. HTTP loopback endpoints are accepted for local
-development only when `NODE_ENV` is not `production`.
+testing only when `NODE_ENV` is not `production`.
 
 `TapayaPayments` remains available as a deprecated compatibility client. Its `prepare`, `retrieve`,
 and other methods keep their existing merchant payment responses. New integrations use `Tapaya` and
@@ -417,7 +432,7 @@ return Response.json({ clientSecret: session.clientSecret, status: session.statu
 ### Mount the card fields
 
 Call `tapaya.checkout.configuration()` once on your server and pass `publishableKey` and `apiOrigin` to the page.
-The card fields require `apiOrigin`: publishable keys start with `pk_dev_` in every environment, so the key cannot
+The card fields require `apiOrigin`: a publishable key (`pk_test_…` or `pk_live_…`) does not
 select the API.
 
 ```ts
@@ -469,10 +484,10 @@ You can also pass a known `clientSecret` to `createPayment()` instead of
 endpoint for one submission. A pending payment always checks its current status
 instead of charging again.
 
-`loadTapaya` loads Tapaya.js from `https://js.tapaya.com/checkout/0.1.0/checkout.js`.
-Development updates use the same path and are cached for five minutes.
+`loadTapaya` loads Tapaya.js from `https://js.tapaya.com/checkout/0.2.0/checkout.js`.
+Script updates use the same path and are cached for five minutes.
 Server-only releases of this package do not change the script version.
-For local development, pass the origin
+For local testing, pass the origin
 that serves Tapaya.js: `loadTapaya(publishableKey, { apiOrigin, origin: 'http://localhost:4191' })`.
 
 Call `payment.destroy()` on teardown. It removes the frame. It cannot cancel a
@@ -484,15 +499,15 @@ call `loadTapaya` again to retry, or use `retryMount()` with the React hook.
 #### Without a bundler
 
 ```html
-<script src="https://js.tapaya.com/checkout/0.1.0/checkout.js"></script>
+<script src="https://js.tapaya.com/checkout/0.2.0/checkout.js"></script>
 <script>
-  const tapaya = Tapaya('pk_dev_…', { apiOrigin: 'https://api.sandbox.tapaya.com' })
+  const tapaya = Tapaya('pk_test_…', { apiOrigin: 'https://api.sandbox.tapaya.com' })
   const payment = tapaya.createPayment({ prepare: '/api/payments' })
   payment.mount('#card')
 </script>
 ```
 
-To pin an exact release, use `/checkout/0.1.0/checkout.js` and the SHA-384 hashes
+To pin an exact release, use `/checkout/0.2.0/checkout.js` and the SHA-384 hashes
 in that version's `manifest.json` for `integrity` attributes. Channel URLs change
 with each compatible fix, so they cannot carry a fixed hash.
 
@@ -569,6 +584,60 @@ selected; it keeps what the shopper typed. Lock the selector while
 `snapshot.busy` is true or the state is `pending` or `action_required`. Lock the
 order once your server has reserved it, including after a decline.
 
+### Add Apple Pay and Google Pay
+
+Pass `wallets` with the checkout total in minor units. Tapaya shows available
+wallets as separate payment options. Unsupported or disabled wallets stay hidden.
+If your checkout owns the selector, pass `paymentMethod: 'card'`, `'google_pay'`,
+or `'apple_pay'` to render only that method. If that wallet is unavailable, for
+example on an unsupported browser or before the merchant enables it, the frame
+shows the `walletUnavailable` label instead of card entry, and `snapshot.error`
+reports `{ code: 'wallet_unavailable' }`. Offer the shopper another method in
+your selector. The error appears only while another payment is safe to start:
+a successful, pending or uncertain payment shows its own status instead.
+
+```ts
+const payment = payments.createPayment({
+  wallets: { amount: 2450, currency: 'EUR' },
+  onWalletClick: async () => {
+    if (!form.reportValidity()) throw new Error('Complete the checkout details.')
+    // Validate the cart and reserve the order on your server.
+    const response = await fetch('/api/payment', { method: 'POST' })
+    if (!response.ok) throw new Error('Could not reserve the payment.')
+    return response.json() // { clientSecret, status }
+  },
+})
+await payment.mount('#payment')
+```
+
+`onWalletClick` runs when the shopper clicks the branded wallet button, never when
+they select a payment option or the fields mount.
+Without this callback, wallets use the existing `prepare` or `clientSecret` option.
+The React `usePayment` hook accepts the same options and reads the latest callback.
+
+Pass `wallets: { amount, currency, disabled: true }` until your checkout details
+are valid. Update `disabled` to `false` to enable the branded wallet button without
+remounting it.
+
+When shipping or discounts change, call
+`payment.update({ wallets: { amount: 2450, currency: 'EUR' } })`.
+Pass `wallets: null` to hide the buttons until the total is ready.
+The React hook updates the total when its `wallets` option changes.
+Tapaya refuses to confirm if the reserved payment differs from the wallet total.
+
+`snapshot.paymentMethod` identifies the selected method. Show your card submit
+button only for `card`; wallets require their own branded button.
+
+Wallet results use the same `snapshot`, recovery, and confirmation-page flow as cards.
+Closing a wallet sheet does not charge the payment. Keep the checkout available.
+An uncertain confirmation stays pending and blocks another charge.
+
+Enable wallets in the merchant's checkout settings. For Apple Pay, host the
+verification file and register the shop domain through the platform API.
+Production Google Pay requires an active Google Pay merchant.
+The SDK sets `allow="payment"` on its frame. If you embed the shop in another frame,
+that outer frame must also allow payment. Cross-origin Apple Pay requires Safari 17 or later.
+
 ### Customize
 
 `appearance.variables` themes the frame so the fields can match your own inputs.
@@ -614,7 +683,10 @@ frame-src https://js.tapaya.com
 ```
 
 The provider's scripts, the issuer challenge, and all payment API calls run inside
-the frame under Tapaya's own policy. During 3-D Secure the frame temporarily covers the viewport. It uses the browser's
+the frame under Tapaya's own policy. During 3-D Secure the frame temporarily covers the viewport.
+The original payment controls stay visible but dimmed and inert behind the issuer
+challenge. A placeholder preserves the checkout layout, and the secure fields are
+restored without being recreated. It uses the browser's
 top layer (the Popover API), so it appears above your header, sticky elements and
 any stacking context, and nothing on your page needs a z-index. Browsers without
 the Popover API (before Chrome 114, Safari 17 and Firefox 125) fall back to

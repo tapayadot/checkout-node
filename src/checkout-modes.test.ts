@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
-import { Tapaya, TapayaConnectionError, TapayaOrderMismatchError, TapayaValidationError } from './index.js'
+import { Tapaya, TapayaConnectionError, TapayaOrderMismatchError, TapayaPayments, TapayaValidationError } from './index.js'
 import type {
   CheckoutSession, CreateCheckoutSessionParams, CreateEmbeddedSessionOptions,
-  EmbeddedCheckoutSession, HostedCheckoutSession, RetrieveEmbeddedSessionOptions,
+  EmbeddedCheckoutSession, HostedCheckoutSession, RetrieveEmbeddedSessionOptions, TapayaEnvironment,
 } from './index.js'
 
 const order = { merchantOrderId: 'order-1', amount: 1200, currency: 'EUR' }
@@ -84,14 +84,15 @@ describe('checkout modes', () => {
     expect(fetcher.mock.calls[1][1].headers['Idempotency-Key']).toBe('attempt-1')
   })
 
-  it.each(['option', 'environment variable'])('rejects embedded production calls selected by %s', async (source) => {
-    const fetcher = vi.fn().mockResolvedValue(Response.json(hosted))
+  it.each(['option', 'environment variable'])('sends production calls selected by %s to api.tapaya.com', async (source) => {
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json(payment)).mockResolvedValueOnce(Response.json(hosted))
     if (source === 'environment variable') vi.stubEnv('TAPAYA_ENVIRONMENT', 'production')
     const tapaya = new Tapaya('secret', { fetch: fetcher, ...(source === 'option' ? { environment: 'production' as const } : {}) })
-    await expect(tapaya.checkout.sessions.create({ ...order, mode: 'embedded' })).rejects.toThrow('not available in production')
-    expect(fetcher).not.toHaveBeenCalled()
+    await tapaya.checkout.sessions.create({ ...order, mode: 'embedded' })
     await tapaya.checkout.sessions.create(order)
-    expect(fetcher.mock.calls[0][0]).toBe('https://api.tapaya.com/merchant/checkout-sessions')
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      'https://api.tapaya.com/merchant/payments', 'https://api.tapaya.com/merchant/checkout-sessions',
+    ])
   })
 
   it('retrieves each mode explicitly and preserves get as an alias', async () => {
@@ -200,7 +201,7 @@ describe('checkout modes', () => {
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
     const tapaya = new Tapaya('secret', { fetch: fetcher })
     const sessions = tapaya.checkout.sessions
-    expect(await tapaya.checkout.configuration()).toEqual({ ...configuration, apiOrigin: 'https://api.sandbox.tapaya.com' })
+    expect(await tapaya.checkout.configuration()).toEqual({ ...configuration, environment: 'sandbox', apiOrigin: 'https://api.sandbox.tapaya.com' })
     expect(await sessions.findByOrder(order.merchantOrderId)).toMatchObject({ mode: 'embedded', paymentStatus: 'unpaid' })
     expect(await sessions.confirm(payment.id, 'tok_test')).toMatchObject({ status: 'completed', paymentStatus: 'successful' })
     expect(await sessions.recover(payment.id)).toMatchObject({ status: 'open', paymentStatus: 'pending' })
@@ -288,10 +289,21 @@ describe('checkout modes', () => {
     expectTypeOf(check).parameter(0).toEqualTypeOf<CheckoutSession>()
   })
 
-  it('routes embedded calls of the development environment to the dev API and reports its origin', async () => {
-    const fetcher = vi.fn().mockResolvedValue(Response.json({ publishableKey: `pk_dev_${'a'.repeat(32)}`, environment: 'development' }))
-    const tapaya = new Tapaya('secret', { fetch: fetcher, environment: 'development' })
-    expect(await tapaya.checkout.configuration()).toMatchObject({ apiOrigin: 'https://api.dev.tapaya.com' })
-    expect(String(fetcher.mock.calls[0][0])).toBe('https://api.dev.tapaya.com/merchant/payments/configuration')
+  it('exposes only sandbox and production in payment configuration', () => {
+    expectTypeOf<TapayaEnvironment>().toEqualTypeOf<'sandbox' | 'production'>()
+    expectTypeOf<Awaited<ReturnType<Tapaya['checkout']['configuration']>>['environment']>()
+      .toEqualTypeOf<'sandbox' | 'production'>()
+  })
+
+  it.each(['unified', 'legacy'])('uses the URL environment override for %s embedded configuration and browser origin', async (entry) => {
+    vi.stubEnv('TAPAYA_BASE_URL', 'https://proxy.example.com')
+    vi.stubEnv('TAPAYA_ENVIRONMENT', 'invalid')
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ publishableKey: `pk_test_${'a'.repeat(32)}`, environment: 'development' }))
+    const client = entry === 'unified'
+      ? new Tapaya('secret', { fetch: fetcher }).checkout
+      : new TapayaPayments('secret', { fetch: fetcher })
+    vi.stubEnv('TAPAYA_BASE_URL', 'https://changed.example.com')
+    expect(await client.configuration()).toMatchObject({ environment: 'sandbox', apiOrigin: 'https://proxy.example.com' })
+    expect(fetcher.mock.calls[0][0]).toBe('https://proxy.example.com/merchant/payments/configuration')
   })
 })

@@ -58,6 +58,7 @@ const session: CheckoutSession = { ...created, mode: 'hosted', taxBreakdown: [],
 
 beforeEach(() => {
   vi.stubEnv('TAPAYA_ENVIRONMENT', undefined)
+  vi.stubEnv('TAPAYA_BASE_URL', undefined)
   vi.stubEnv('TAPAYA_SECRET_KEY', undefined)
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 })
@@ -98,6 +99,30 @@ describe('client configuration', () => {
     expect(fetchImpl.mock.calls[0][1].headers.authorization).toBe('Bearer environment-secret')
   })
 
+  it.each([
+    ['tapaya_live_key', 'https://api.tapaya.com'],
+    ['tapaya_test_key', 'https://api.sandbox.tapaya.com'],
+    ['organization-secret', 'https://api.sandbox.tapaya.com'],
+  ])('selects the API from a %s key when no environment is set', async (apiKey, host) => {
+    const fetchImpl = vi.fn().mockImplementation(async () => response(200, created))
+    await new Tapaya(apiKey, { fetch: fetchImpl }).checkout.sessions.create(params)
+    expect(fetchImpl.mock.calls[0][0]).toBe(`${host}/merchant/checkout-sessions`)
+  })
+
+  it.each([
+    ['tapaya_live_key', 'sandbox'], ['tapaya_test_key', 'production'],
+  ] as const)('refuses a %s key in %s', (apiKey, environment) => {
+    expect(() => new Tapaya(apiKey, { environment })).toThrow(/cannot be used in/)
+    vi.stubEnv('TAPAYA_ENVIRONMENT', environment)
+    expect(() => new Tapaya(apiKey)).toThrow(/cannot be used in/)
+  })
+
+  it('leaves an explicit base URL to the caller', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => response(200, created))
+    await new Tapaya('tapaya_live_key', { fetch: fetchImpl, environment: 'sandbox', baseUrl: 'https://proxy.example.com' }).checkout.sessions.create(params)
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://proxy.example.com/merchant/checkout-sessions')
+  })
+
   it('defaults to sandbox and the global fetch', async () => {
     vi.stubEnv('TAPAYA_SECRET_KEY', 'secret')
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
@@ -116,22 +141,44 @@ describe('client configuration', () => {
     expect(() => new Tapaya(apiKey)).toThrow('Tapaya API key is required')
   })
 
-  it.each(['', '   ', 'dev', 'PRODUCTION', 'toString'])('rejects invalid environment defaults: %j', (environment) => {
+  it.each(['', '   ', 'dev', 'development', 'PRODUCTION', 'toString'])('rejects invalid environment defaults: %j', (environment) => {
     vi.stubEnv('TAPAYA_ENVIRONMENT', environment)
     expect(() => new Tapaya('secret')).toThrow(/Invalid Tapaya environment/)
   })
 
-  it('rejects an invalid explicit environment without falling back', () => {
+  it.each(['dev', 'development'])('rejects explicit environment %s without falling back', (environment) => {
     vi.stubEnv('TAPAYA_ENVIRONMENT', 'sandbox')
-    expect(() => new Tapaya('secret', { environment: 'dev' as TapayaEnvironment }))
+    expect(() => new Tapaya('secret', { environment: environment as TapayaEnvironment }))
       .toThrow(/Invalid Tapaya environment/)
   })
 
   it('gives a custom base URL precedence over environment selection', async () => {
     vi.stubEnv('TAPAYA_ENVIRONMENT', 'invalid')
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
-    await client(fetchImpl, { environment: 'production', baseUrl: 'https://api.dev.tapaya.com/' }).create(params)
-    expect(fetchImpl.mock.calls[0][0]).toBe('https://api.dev.tapaya.com/merchant/checkout-sessions')
+    await client(fetchImpl, { environment: 'production', baseUrl: 'https://proxy.example.com/' }).create(params)
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://proxy.example.com/merchant/checkout-sessions')
+  })
+
+  it('reads the base URL from the environment once and overrides environment selection', async () => {
+    vi.stubEnv('TAPAYA_BASE_URL', 'https://proxy.example.com')
+    vi.stubEnv('TAPAYA_ENVIRONMENT', 'invalid')
+    const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
+    const sessions = client(fetchImpl, { environment: 'sandbox' })
+    vi.stubEnv('TAPAYA_BASE_URL', 'https://changed.example.com')
+    await sessions.create(params)
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://proxy.example.com/merchant/checkout-sessions')
+  })
+
+  it('gives an explicit base URL precedence over the URL environment variable', async () => {
+    vi.stubEnv('TAPAYA_BASE_URL', 'not a URL')
+    const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
+    await client(fetchImpl, { baseUrl: 'https://explicit.example.com' }).create(params)
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://explicit.example.com/merchant/checkout-sessions')
+  })
+
+  it('validates the URL environment override', () => {
+    vi.stubEnv('TAPAYA_BASE_URL', 'not a URL')
+    expect(() => new Tapaya('secret')).toThrow(/API base URL/)
   })
 
   it.each([

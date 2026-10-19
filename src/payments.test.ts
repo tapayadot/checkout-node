@@ -108,6 +108,17 @@ describe("server payment client", () => {
 
 
 describe("embedded payment safety", () => {
+  it.each([
+    ['test', 'development', 'sandbox'],
+    ['test', 'sandbox', 'sandbox'],
+    ['live', 'production', 'production'],
+  ])('maps %s keys and provider environment %s to %s', async (mode, environment, expectedEnvironment) => {
+    const publishableKey = `pk_${mode}_${'c'.repeat(32)}`;
+    const client = new TapayaPayments('merchant-secret', {
+      fetch: vi.fn().mockResolvedValue(Response.json({ publishableKey, environment })),
+    });
+    expect(await client.configuration()).toMatchObject({ publishableKey, environment: expectedEnvironment });
+  });
   it.each([".", "..", "", " ", "a".repeat(201), null, undefined])("rejects unsafe payment ID %j before sending authentication", async (id) => {
     const fetcher = vi.fn();
     const client = new TapayaPayments("merchant-secret", { fetch: fetcher });

@@ -26,7 +26,7 @@ function serve(version: string) {
 }
 
 it('reuses an already loaded Tapaya global', async () => {
-  const factory = Object.assign(vi.fn(), { version: '0.1.0' })
+  const factory = Object.assign(vi.fn(), { version: '0.2.0' })
   window.Tapaya = factory as never
   const { loadTapaya } = await import('./index.js')
   await loadTapaya(KEY)
@@ -35,28 +35,28 @@ it('reuses an already loaded Tapaya global', async () => {
 })
 
 it('loads the hosted script from the versioned path once', async () => {
-  const factory = serve('0.1.3')
+  const factory = serve('0.2.3')
   const { loadTapaya } = await import('./index.js')
   await Promise.all([loadTapaya(KEY), loadTapaya(KEY, { apiOrigin: 'http://localhost:3010' })])
   const appended = vi.mocked(document.head.appendChild).mock.calls
   expect(appended).toHaveLength(1)
-  expect((appended[0][0] as HTMLScriptElement).src).toBe('https://js.tapaya.com/checkout/0.1.0/checkout.js')
+  expect((appended[0][0] as HTMLScriptElement).src).toBe('https://js.tapaya.com/checkout/0.2.0/checkout.js')
   expect(factory).toHaveBeenLastCalledWith(KEY, { apiOrigin: 'http://localhost:3010' })
 })
 
-it('refuses an incompatible hosted version and insecure origins', async () => {
-  serve('0.2.0')
+it.each(['0.1.0', '0.3.0'])('refuses incompatible hosted version %s and insecure origins', async (version) => {
+  serve(version)
   const { loadTapaya } = await import('./index.js')
   await expect(loadTapaya(KEY)).rejects.toMatchObject({ code: 'load' })
   await expect(loadTapaya(KEY, { origin: 'http://cdn.example' })).rejects.toMatchObject({ code: 'configuration' })
 })
 
 it('supports a local asset server', async () => {
-  serve('0.1.0')
+  serve('0.2.0')
   const { loadTapaya } = await import('./index.js')
   await loadTapaya(KEY, { origin: 'http://localhost:4191' })
   expect((vi.mocked(document.head.appendChild).mock.calls[0][0] as HTMLScriptElement).src).toBe(
-    'http://localhost:4191/checkout/0.1.0/checkout.js',
+    'http://localhost:4191/checkout/0.2.0/checkout.js',
   )
 })
 
@@ -71,14 +71,14 @@ it('times out a stalled script and allows a fresh load', async () => {
   expect(script.isConnected).toBe(false)
   expect(vi.getTimerCount()).toBe(0)
 
-  const factory = serve('0.1.3')
-  await expect(loadTapaya(KEY)).resolves.toMatchObject({ version: '0.1.3' })
+  const factory = serve('0.2.3')
+  await expect(loadTapaya(KEY)).resolves.toMatchObject({ version: '0.2.3' })
   expect(factory).toHaveBeenCalledOnce()
   expect(vi.getTimerCount()).toBe(0)
 })
 
 it('refuses a hosted release older than the required script version', async () => {
-  serve('0.0.9')
+  serve('0.1.9')
   const { loadTapaya } = await import('./index.js')
   await expect(loadTapaya(KEY)).rejects.toMatchObject({ code: 'load' })
 })

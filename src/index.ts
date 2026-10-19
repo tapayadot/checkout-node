@@ -1,6 +1,6 @@
 import { z } from 'zod/v4'
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.3.0'
 
 const USER_AGENT = `tapaya-checkout-js/${VERSION}`
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -11,7 +11,6 @@ const MAX_RETRY_DELAY_MS = 8_000
 const MAX_RETRY_AFTER_MS = 10_000
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
 const API_BASE_URLS = {
-  development: 'https://api.dev.tapaya.com',
   sandbox: 'https://api.sandbox.tapaya.com',
   production: 'https://api.tapaya.com',
 }
@@ -19,7 +18,7 @@ const MAX_INT32 = 2_147_483_647
 // 409 error code: a request with the same Idempotency-Key is still in progress.
 const IDEMPOTENCY_IN_PROGRESS = 'API-0024'
 
-export type TapayaEnvironment = 'development' | 'sandbox' | 'production'
+export type TapayaEnvironment = 'sandbox' | 'production'
 
 /** A product shown on the hosted page. Items are for display only and do not change the amount charged. */
 export type CheckoutItem = {
@@ -256,11 +255,14 @@ const sessionSchema = z.object({
 export type TapayaOptions = {
   /** Merchant identifier belonging to the organization that owns the Secret key. */
   merchantToken?: string
-  /** Selects the API URL when `baseUrl` is not set. Defaults to `TAPAYA_ENVIRONMENT`, then `sandbox`. */
+  /**
+   * Selects the API URL when neither `baseUrl` nor `TAPAYA_BASE_URL` is set. Defaults to `TAPAYA_ENVIRONMENT`, then `production` for a
+   * `tapaya_live_` key and `sandbox` otherwise. A live key outside production, or a test key in it, throws.
+   */
   environment?: TapayaEnvironment
   /** Embedded API overrides. Defaults to this client's API URL, fetch and timeout. */
   embedded?: TapayaPaymentsOptions
-  /** Overrides the API URL. Must use HTTPS, except for local hosts outside `NODE_ENV=production`. */
+  /** Overrides the API URL. Defaults to `TAPAYA_BASE_URL`, then the environment URL. Must use HTTPS, except for local hosts outside `NODE_ENV=production`. */
   baseUrl?: string
   /** Custom `fetch` implementation. Defaults to the global `fetch`. */
   fetch?: typeof fetch
@@ -414,26 +416,23 @@ export class Tapaya {
   constructor(apiKey: string | undefined = readEnv('TAPAYA_SECRET_KEY'), options: TapayaOptions = {}) {
     if (!apiKey?.trim()) throw new TapayaError('Tapaya API key is required')
     validateTransportOptions(options, (message) => new TapayaError(message))
+    const baseUrl = options.baseUrl ?? readEnv('TAPAYA_BASE_URL') ?? environmentBaseUrl(apiKey, options.environment)
     const client = new HttpClient({
       apiKey,
       merchantToken: options.merchantToken,
-      baseUrl: validateUrl(options.baseUrl ?? environmentBaseUrl(options.environment), 'Invalid Tapaya API base URL'),
+      baseUrl: validateUrl(baseUrl, 'Invalid Tapaya API base URL'),
       fetch: options.fetch ?? ((input, init) => fetch(input, init)),
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
     })
     const embeddedOptions: TapayaPaymentsOptions = {
       merchantToken: options.merchantToken,
-      baseUrl: options.baseUrl ?? environmentBaseUrl(options.environment),
+      baseUrl,
       fetch: options.fetch,
       timeoutMs: options.timeoutMs,
       ...options.embedded,
     }
-    const sessions = new CheckoutSessions(client, () => {
-      if (embeddedOptions.baseUrl === API_BASE_URLS.production)
-        throw new TapayaError('Embedded checkout is not available in production yet')
-      return new TapayaPayments(apiKey, embeddedOptions)
-    })
+    const sessions = new CheckoutSessions(client, () => new TapayaPayments(apiKey, embeddedOptions))
     this.checkout = { sessions, configuration: (requestOptions) => sessions.configuration(requestOptions) }
   }
 }
@@ -793,10 +792,16 @@ function readEnv(name: string): string | undefined {
   return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name]
 }
 
-function environmentBaseUrl(environment?: TapayaEnvironment): string {
-  const name = environment ?? readEnv('TAPAYA_ENVIRONMENT') ?? 'sandbox'
-  if (name !== 'development' && name !== 'sandbox' && name !== 'production') {
-    throw new TapayaError('Invalid Tapaya environment: expected development, sandbox or production')
+/** Live merchant keys work only in production and test keys never do, so the key decides when nothing else is set. */
+function environmentBaseUrl(apiKey: string, environment?: TapayaEnvironment): string {
+  const name = environment ?? readEnv('TAPAYA_ENVIRONMENT')
+  const live = apiKey.startsWith('tapaya_live_') ? true : apiKey.startsWith('tapaya_test_') ? false : undefined
+  if (name === undefined) return API_BASE_URLS[live ? 'production' : 'sandbox']
+  if (name !== 'sandbox' && name !== 'production') {
+    throw new TapayaError('Invalid Tapaya environment: expected sandbox or production')
+  }
+  if (live !== undefined && live !== (name === 'production')) {
+    throw new TapayaError(`A ${live ? 'live' : 'test'} Tapaya API key cannot be used in ${name}`)
   }
   return API_BASE_URLS[name]
 }
@@ -855,7 +860,7 @@ export type MerchantPayment = {
 export type PaymentConfiguration = {
   /** Safe to expose in the browser. */
   publishableKey: string
-  environment: 'development'
+  environment: 'sandbox' | 'production'
   /** Origin of the Tapaya API this server talks to. Pass it to the browser loader as `apiOrigin`. */
   apiOrigin: string
 }
@@ -915,7 +920,7 @@ export class TapayaPayments {
     if (typeof window !== 'undefined') throw new TapayaError('TapayaPayments must only run on the server')
     if (typeof apiKey !== 'string' || !apiKey.trim()) throw new TapayaError('A merchant API key is required')
     validateTransportOptions(options, (message) => new TapayaError(message))
-    const url = validateUrl(options.baseUrl ?? API_BASE_URLS.sandbox, 'Invalid Tapaya payments API base URL')
+    const url = validateUrl(options.baseUrl ?? readEnv('TAPAYA_BASE_URL') ?? API_BASE_URLS.sandbox, 'Invalid Tapaya payments API base URL')
     if (url.search || url.hash) throw new TapayaError('The payments API base URL must not contain a query or fragment')
     this.#apiKey = apiKey
     this.#merchantToken = options.merchantToken
@@ -927,8 +932,10 @@ export class TapayaPayments {
   async configuration(options: PaymentRequestOptions = {}): Promise<PaymentConfiguration> {
     const response = await this.#request('/configuration', options)
     const result = z.object({
-      publishableKey: z.string().regex(/^pk_dev_[0-9a-f]{32}$/),
-      environment: z.literal('development'),
+      publishableKey: z.string().regex(/^pk_(dev|test|live)_[0-9a-f]{32}$/),
+      environment: z.enum(['development', 'sandbox', 'production']).transform((environment) =>
+        environment === 'development' ? 'sandbox' : environment,
+      ),
     }).safeParse(response.body)
     if (!result.success) throw this.#responseError(response, 'Invalid payment configuration')
     return { ...result.data, apiOrigin: new URL(this.#baseUrl).origin }

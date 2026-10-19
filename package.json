@@ -1,6 +1,6 @@
 {
   "name": "@tapayadot/checkout",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Tapaya Checkout SDK: server client, browser loader, and React hook",
   "type": "module",
   "types": "./dist/index.d.ts",
