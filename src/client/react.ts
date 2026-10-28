@@ -35,9 +35,13 @@ export function usePayment(options: UsePaymentOptions | null) {
   const locale = options?.locale
   // Compare by value so inline objects do not remount or restyle the fields.
   const labels = JSON.stringify(options?.labels ?? null)
+  const cardSaving = JSON.stringify(options?.cardSaving ?? null)
   const appearance = JSON.stringify(options?.appearance ?? null)
-  // The provider places the brand icon only when its fields mount.
+  // The provider places the brand icon and the wallets draw their buttons only when the fields mount.
   const cardBrandIcon = options?.appearance?.cardBrandIcon
+  const walletButtonType = options?.appearance?.walletButtonType
+  const walletButtonColor = options?.appearance?.walletButtonColor
+  const walletButtonRadius = options?.appearance?.walletButtonRadius
   const paymentMethod = options?.paymentMethod
   const hasWalletClick = options?.onWalletClick !== undefined
   const prepareEndpoint = typeof options?.prepare === 'string' ? options.prepare : undefined
@@ -45,7 +49,11 @@ export function usePayment(options: UsePaymentOptions | null) {
   const [presentation, setPresentation] = useState({
     locale,
     labels,
+    cardSaving,
     cardBrandIcon,
+    walletButtonType,
+    walletButtonColor,
+    walletButtonRadius,
     prepareEndpoint,
     paymentMethod,
     hasWalletClick,
@@ -56,11 +64,11 @@ export function usePayment(options: UsePaymentOptions | null) {
     // Never remove a frame while it is tokenizing, challenging or confirming.
     if (snapshot.busy) return
     setPresentation((current) =>
-      current.locale === locale && current.labels === labels && current.cardBrandIcon === cardBrandIcon && current.prepareEndpoint === prepareEndpoint && current.paymentMethod === paymentMethod && current.hasWalletClick === hasWalletClick
+      current.locale === locale && current.labels === labels && current.cardSaving === cardSaving && current.cardBrandIcon === cardBrandIcon && current.walletButtonType === walletButtonType && current.walletButtonColor === walletButtonColor && Object.is(current.walletButtonRadius, walletButtonRadius) && current.prepareEndpoint === prepareEndpoint && current.paymentMethod === paymentMethod && current.hasWalletClick === hasWalletClick
         ? current
-        : { locale, labels, cardBrandIcon, prepareEndpoint, paymentMethod, hasWalletClick },
+        : { locale, labels, cardSaving, cardBrandIcon, walletButtonType, walletButtonColor, walletButtonRadius, prepareEndpoint, paymentMethod, hasWalletClick },
     )
-  }, [locale, labels, cardBrandIcon, prepareEndpoint, paymentMethod, hasWalletClick, snapshot.busy])
+  }, [locale, labels, cardSaving, cardBrandIcon, walletButtonType, walletButtonColor, walletButtonRadius, prepareEndpoint, paymentMethod, hasWalletClick, snapshot.busy])
 
   useEffect(() => {
     if (!publishableKey) {
@@ -77,7 +85,11 @@ export function usePayment(options: UsePaymentOptions | null) {
       presentation.paymentMethod !== latest.current?.paymentMethod ||
       presentation.locale !== latest.current?.locale ||
       presentation.labels !== JSON.stringify(latest.current?.labels ?? null) ||
+      presentation.cardSaving !== JSON.stringify(latest.current?.cardSaving ?? null) ||
       presentation.cardBrandIcon !== latest.current?.appearance?.cardBrandIcon ||
+      presentation.walletButtonType !== latest.current?.appearance?.walletButtonType ||
+      presentation.walletButtonColor !== latest.current?.appearance?.walletButtonColor ||
+      !Object.is(presentation.walletButtonRadius, latest.current?.appearance?.walletButtonRadius) ||
       presentation.prepareEndpoint !== (typeof latest.current?.prepare === 'string' ? latest.current.prepare : undefined)
     )
       return
@@ -116,6 +128,7 @@ export function usePayment(options: UsePaymentOptions | null) {
                     return prepare()
                   },
           paymentMethod: presentation.paymentMethod,
+          cardSaving: JSON.parse(presentation.cardSaving) ?? undefined,
           locale: presentation.locale,
           labels: JSON.parse(presentation.labels) ?? undefined,
           appearance: latest.current?.appearance,
@@ -128,6 +141,17 @@ export function usePayment(options: UsePaymentOptions | null) {
                 return onWalletClick()
               }
             : undefined,
+          onShippingAddressChange: async event => {
+            const handler = latest.current?.onShippingAddressChange
+            if (!handler) throw new PaymentError('shipping', 'Configure onShippingAddressChange for dynamic delivery.')
+            await handler(event)
+          },
+          onShippingOptionChange: async event => {
+            const handler = latest.current?.onShippingOptionChange
+            if (!handler) throw new PaymentError('shipping', 'Configure onShippingOptionChange for dynamic delivery.')
+            await handler(event)
+          },
+          onShippingQuoteChange: event => latest.current?.onShippingQuoteChange?.(event),
           onChange: (value) => {
             if (!active) return
             if (payment?.clientSecret) activeSecret.current = { identity, value: payment.clientSecret }
@@ -170,7 +194,8 @@ export function usePayment(options: UsePaymentOptions | null) {
       current?.busy ||
       current?.state === 'pending' ||
       current?.state === 'action_required' ||
-      current?.state === 'successful'
+      current?.state === 'successful' ||
+      current?.state === 'authorized'
     )
       return
     activeSecret.current = null

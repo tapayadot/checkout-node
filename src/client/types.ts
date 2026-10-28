@@ -1,4 +1,4 @@
-import type { EmbeddedCheckoutSession } from '../index.js'
+import type { DeclineReason, EmbeddedCheckoutSession } from '../index.js'
 import type { PaymentError } from './errors.js'
 
 declare global {
@@ -11,7 +11,30 @@ declare global {
   }
 }
 
-export type PaymentStatus = 'ready' | 'successful' | 'declined' | 'pending' | 'action_required' | 'cancelled'
+/**
+ * Future charges the shopper accepts in the Apple Pay sheet when saving for off-session use. Amounts are in minor units
+ * of the payment currency. Apple Pay saves off-session only with an agreement.
+ */
+export type WalletAgreement = {
+  /** `recurring` for subscriptions or `automatic_reload` for top-ups. */
+  type: 'recurring' | 'automatic_reload'
+  /** What the shopper agrees to, such as "Pro plan". */
+  description: string
+  /** HTTPS page where the shopper manages or cancels the agreement, on an allowed checkout website. */
+  managementUrl: string
+  recurring?: { amount: number; interval: 'day' | 'week' | 'month' | 'year'; intervalCount?: number; startDate?: string | null } | null
+  automaticReload?: { amount: number; thresholdAmount: number } | null
+}
+
+/** Your consent wording and terms link, shown with the saving checkbox or disclosure and recorded with the consent. */
+export type SavingTerms = {
+  /** Replaces the default checkbox label or disclosure, in the checkout language. At most 1000 characters. */
+  text?: string | null
+  /** HTTPS page with your full terms, on an allowed checkout website. */
+  url?: string | null
+}
+
+export type PaymentStatus = 'ready' | 'successful' | 'authorized' | 'declined' | 'pending' | 'action_required' | 'cancelled'
 
 /** Tapaya's authoritative outcome. `ready` guarantees that no charge is in flight. */
 export type PaymentResult = {
@@ -20,6 +43,11 @@ export type PaymentResult = {
   paymentId?: string
   /** Only Tapaya can authorize another attempt after a decline. */
   retryAllowed: boolean
+  /** Contact details returned by the wallet, for checkout presentation. Never proof of payment. */
+  walletContact?: {
+    method: 'apple_pay' | 'google_pay'
+    customer: Pick<import('../index.js').CheckoutCustomer, 'email' | 'name' | 'phone' | 'billingAddress'>
+  }
 }
 
 export type PaymentState =
@@ -32,6 +60,7 @@ export type PaymentState =
   | 'submitting'
   | 'recovering'
   | 'successful'
+  | 'authorized'
   | 'declined'
   | 'pending'
   | 'action_required'
@@ -47,6 +76,8 @@ export type PaymentState =
 export type PaymentOutcome = 'open' | 'pending' | 'completed' | 'ended'
 
 export type PaymentSnapshot = {
+  /** Latest server-approved delivery total, for updating the merchant page's order summary and Pay label. */
+  shippingQuote?: ShippingQuoteChangeEvent
   /** Selected payment option. Wallets are authorized with their own branded button. */
   paymentMethod?: 'card' | 'apple_pay' | 'google_pay'
   state: PaymentState
@@ -57,10 +88,38 @@ export type PaymentSnapshot = {
   /** Every field is filled and none reports a validation error. */
   complete: boolean
   result?: PaymentResult
-  error?: { code: string; message: string }
+  error?: { code: PaymentErrorCode; message: string; details?: Record<string, string | number> }
 }
 
+/**
+ * Stable error codes. Show `message` to the shopper and branch on `code`. New codes may be added, so keep a default.
+ *
+ * Fixable by the shopper, never submitted: `cardholder_required`, `card_invalid`, `customer_details_invalid`,
+ * `shipping_address_incomplete`, `shipping_option_required`, `shipping_unavailable`, `shipping_changed`,
+ * `shipping_total_changed`, `shipping_quote_failed`.
+ * Integration mismatches, never submitted: `currency_mismatch` and `amount_mismatch` (wallet options differ from the
+ * payment; `details` has `expected` and `actual`).
+ * Wallets: `wallet_unavailable`, `wallet_button`, `wallet_session_ended`, `wallet_authorization_failed`.
+ * Card processing: `tokenization`, `authentication`.
+ */
+export type PaymentErrorCode =
+  | 'cardholder_required' | 'card_invalid' | 'customer_details_invalid'
+  | 'shipping_address_incomplete' | 'shipping_option_required' | 'shipping_unavailable' | 'shipping_changed'
+  | 'shipping_total_changed' | 'shipping_quote_failed' | 'shipping'
+  | 'currency_mismatch' | 'amount_mismatch'
+  | 'wallet_unavailable' | 'wallet_button' | 'wallet_session_ended' | 'wallet_authorization_failed'
+  | 'tokenization' | 'authentication'
+  | 'access_ended' | 'submission_uncertain' | 'recovery' | 'unavailable' | 'payment' | 'payment_creation'
+  | 'configuration' | 'client_secret' | 'container' | 'not_mounted' | 'not_ready' | 'load' | 'environment'
+  | 'network' | 'invalid_response' | 'frame'
+  | 'no_next_action' | 'http_404'
+  | (string & {})
+
 export type PaymentLabels = {
+  /** Short save-card checkbox label, used for both saving usages. */
+  saveCardOnSession?: string
+  /** Additional disclosure beneath the label for future merchant-initiated charges. */
+  saveCardOffSession?: string
   cardholder: string
   number: string
   expiry: string
@@ -129,6 +188,18 @@ export type AppearanceVariables = {
 /** Where the detected card brand logo sits in the card number field. */
 export type CardBrandIcon = 'left' | 'right' | 'none'
 
+/**
+ * Official Apple Pay and Google Pay button types, such as "Buy with" or "Check out with".
+ * The wallets draw and translate the text; branded buttons cannot show custom text or the amount.
+ */
+export type WalletButtonType = 'plain' | 'buy' | 'pay' | 'checkout' | 'order' | 'book' | 'donate' | 'subscribe'
+
+/**
+ * Official wallet button colors. Use `black` on light backgrounds, `white` on dark ones, and
+ * `white-outline` on white or light backgrounds with little contrast. Google Pay draws `white` for both white styles.
+ */
+export type WalletButtonColor = 'black' | 'white' | 'white-outline'
+
 export type Appearance = {
   variables?: Partial<AppearanceVariables>
   /**
@@ -136,6 +207,18 @@ export type Appearance = {
    * not resized. Applied when the fields mount; `update()` does not change it.
    */
   cardBrandIcon?: CardBrandIcon
+  /**
+   * Text on the official wallet buttons. Defaults to `plain`, the logo only. Apple Pay has no
+   * `pay` type and shows `plain` instead. Applied when the fields mount; `update()` does not change it.
+   */
+  walletButtonType?: WalletButtonType
+  /** Wallet button color. Defaults to `black`. Applied when the fields mount; `update()` does not change it. */
+  walletButtonColor?: WalletButtonColor
+  /**
+   * Wallet button corner radius in CSS pixels, from 0 (square) to 24 (pill). Defaults to 8. Match it to
+   * your other buttons. Applied when the fields mount; `update()` does not change it.
+   */
+  walletButtonRadius?: number
 }
 
 /**
@@ -145,6 +228,8 @@ export type Appearance = {
 export type PreparedPayment = {
   clientSecret: string | null
   status?: EmbeddedCheckoutSession['status']
+  /** Include for manual capture so completed checkout preserves the authorization outcome after browser access ends. */
+  paymentStatus?: EmbeddedCheckoutSession['paymentStatus']
 }
 
 /**
@@ -160,6 +245,19 @@ export type PrepareSource = string | (() => Promise<string | PreparedPayment>)
 export type ClientSecretSource = string | (() => Promise<string | PreparedPayment>)
 
 export type PaymentOptions = {
+  /** Show saving controls before a lazily created payment exists. The payment's policy is checked again before confirmation. Override wording through labels. */
+  cardSaving?: {
+    savePaymentMethod: 'optional' | 'required'
+    paymentMethodUsage?: 'on_session' | 'off_session'
+    /** The payment's wallet agreement, needed to save Apple Pay for off-session use. */
+    walletAgreement?: WalletAgreement | null
+    /** The payment's saving terms. Shown before the payment exists and checked against it before confirmation. */
+    savingTerms?: SavingTerms | null
+  }
+  /** Notify your backend to approve this revision, then resolve. Browser return values cannot set the total. */
+  onShippingAddressChange?: (event: ShippingChangeEvent) => Promise<void>
+  onShippingOptionChange?: (event: ShippingChangeEvent) => Promise<void>
+  onShippingQuoteChange?: (event: ShippingQuoteChangeEvent) => void
   /**
    * Render only this method when the merchant owns the payment selector. An unavailable wallet
    * shows an error instead of card entry and reports `wallet_unavailable` in `snapshot.error`
@@ -189,8 +287,28 @@ export type SubmitOptions = { clientSecret?: ClientSecretSource }
 export type WalletOptions = {
   amount: number
   currency: string
+  /** Collection hint when opening a wallet before prepare finishes. The server policy remains authoritative. */
+  customerCollection?: import('../index.js').CustomerCollection
+  /** Set when a wallet can open before prepare returns the server's shipping policy. */
+  shippingRequired?: boolean
   /** Keep the branded button visible but prevent opening the wallet until checkout is valid. */
   disabled?: boolean
+}
+
+export type ShippingChangeEvent = {
+  paymentId: string
+  revision: number
+  address: import('../index.js').CheckoutContactAddress
+  selectedOptionId: string | null
+}
+
+export type ShippingQuoteChangeEvent = {
+  paymentId: string
+  revision: number
+  amount: number
+  shipping: number
+  tax: number | null
+  currency: string
 }
 
 /** A same-origin payment endpoint, or an existing secret/custom request. */
@@ -222,9 +340,44 @@ export interface Payment {
   destroy(): void
 }
 
+export type HandleNextActionOptions = {
+  /** The `action_required` payment's `clientSecret` from your server. Keep it in memory only. */
+  clientSecret: string
+}
+
+/** Status after `handleNextAction`. Read the payment on your server before fulfilling the order. */
+export type NextActionStatus = 'successful' | 'authorized' | 'declined' | 'pending' | 'action_required' | 'cancelled'
+
+/**
+ * Outcome of `handleNextAction`. A decline resolves; it does not reject. `action_required` means the shopper
+ * did not complete verification or confirmation: call `handleNextAction` again to retry the same payment.
+ * `pending`: the outcome is not known yet; read the payment on your server. `cancelled`: the action expired.
+ */
+export type NextActionResult = {
+  status: NextActionStatus
+  paymentId: string
+  /** Whether the outcome permits retrying. After do-not-retry, use another card for this order. */
+  retryAllowed: boolean
+  /** Set when `status` is `declined`. */
+  declineReason?: DeclineReason
+  /** For unfinished actions: `authentication_failed` for verification, `confirmation_failed` for confirmation. */
+  error?: { code: string; message: string }
+}
+
 export interface Payments {
   readonly version: string
   createPayment(options?: PaymentOptions): Payment
+  /**
+   * Complete an `action_required` saved-card payment in your page. Tapaya's
+   * secure frame runs 3-D Secure in a cancellable modal over your page, including for frictionless approvals.
+   * Tapaya then charges the card once and this resolves with the outcome.
+   *
+   * Rejects with `PaymentError` only when Tapaya.js cannot handle the payment: an invalid client secret
+   * (`client_secret`), an unknown, revoked or merchant-initiated payment (`http_404`), a payment without an action
+   * (`no_next_action`), or a network or frame failure. When `error.submitted` is true the card may have been charged:
+   * read the payment on your server before offering another attempt.
+   */
+  handleNextAction(options: HandleNextActionOptions): Promise<NextActionResult>
 }
 
 export type LoadOptions = {

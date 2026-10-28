@@ -22,10 +22,16 @@ function Checkout({
   label,
   height = '48px',
   icon,
+  walletButtonType,
+  walletButtonColor,
+  walletButtonRadius,
 }: {
   label: string
   height?: string
   icon?: 'left' | 'right' | 'none'
+  walletButtonType?: 'plain' | 'buy'
+  walletButtonColor?: 'black' | 'white'
+  walletButtonRadius?: number
 }) {
   hook = usePayment({
     publishableKey: KEY,
@@ -33,6 +39,9 @@ function Checkout({
     appearance: {
       variables: { colorText: '#000', fieldHeight: height },
       ...(icon ? { cardBrandIcon: icon } : {}),
+      ...(walletButtonType ? { walletButtonType } : {}),
+      ...(walletButtonColor ? { walletButtonColor } : {}),
+      ...(walletButtonRadius !== undefined ? { walletButtonRadius } : {}),
     },
   })
   return hook.snapshot.state === 'successful'
@@ -44,7 +53,8 @@ beforeEach(() => {
   vi.resetAllMocks()
   created.length = 0
   vi.mocked(loadTapaya).mockResolvedValue({
-    version: '0.2.0',
+    version: '0.3.0',
+    handleNextAction: vi.fn(),
     createPayment: (options = {}) => {
       created.push(options)
       let snapshot: PaymentSnapshot = { state: 'ready', outcome: 'open', busy: false, canSubmit: true, complete: false }
@@ -89,6 +99,31 @@ it('updates wallet totals without remounting and uses the latest checkout callba
   expect(first).not.toHaveBeenCalled()
 })
 
+it('forwards shipping callbacks and reads their latest values without remounting', async () => {
+  const first = vi.fn().mockResolvedValue(undefined)
+  const next = vi.fn().mockResolvedValue(undefined)
+  const quoteHandler = vi.fn()
+  function ShippingCheckout({ handler }: { handler: NonNullable<PaymentOptions['onShippingAddressChange']> }) {
+    hook = usePayment({ publishableKey: KEY, onShippingAddressChange: handler, onShippingOptionChange: handler, onShippingQuoteChange: quoteHandler })
+    return createElement('div', { ref: hook.fieldRef })
+  }
+  const view = render(createElement(ShippingCheckout, { handler: first }))
+  await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
+  const mounts = created.length
+  const event = { paymentId: 'payment-1', revision: 1, address: { country: 'CZ' }, selectedOptionId: null }
+  await created.at(-1)!.onShippingAddressChange!(event)
+  expect(first).toHaveBeenCalledWith(event)
+  view.rerender(createElement(ShippingCheckout, { handler: next }))
+  await act(async () => {})
+  await created.at(-1)!.onShippingAddressChange!(event)
+  await created.at(-1)!.onShippingOptionChange!({ ...event, selectedOptionId: 'standard' })
+  const quote = { paymentId: 'payment-1', revision: 1, amount: 1500, shipping: 300, tax: 200, currency: 'EUR' }
+  created.at(-1)!.onShippingQuoteChange!(quote)
+  expect(next).toHaveBeenCalledTimes(2)
+  expect(quoteHandler).toHaveBeenCalledWith(quote)
+  expect(created).toHaveLength(mounts)
+})
+
 it('accepts null wallet totals and hides wallets without remounting', async () => {
   function WalletCheckout({ wallets }: { wallets: WalletOptions | null }) {
     hook = usePayment({ publishableKey: KEY, wallets })
@@ -104,6 +139,21 @@ it('accepts null wallet totals and hides wallets without remounting', async () =
   expect(update).toHaveBeenLastCalledWith({ wallets: null })
   expect(created).toHaveLength(mounts)
   expect(destroy).not.toHaveBeenCalled()
+})
+
+it('passes saving policy before payment creation and remounts only when its values change', async () => {
+  function Saving({ usage }: { usage: 'on_session' | 'off_session' }) {
+    hook = usePayment({ publishableKey: KEY, cardSaving: { savePaymentMethod: 'optional', paymentMethodUsage: usage } })
+    return createElement('div', { ref: hook.fieldRef })
+  }
+  const view = render(createElement(Saving, { usage: 'on_session' }))
+  await waitFor(() => expect(created).toHaveLength(1))
+  expect(created[0].cardSaving).toEqual({ savePaymentMethod: 'optional', paymentMethodUsage: 'on_session' })
+  view.rerender(createElement(Saving, { usage: 'on_session' }))
+  expect(created).toHaveLength(1)
+  view.rerender(createElement(Saving, { usage: 'off_session' }))
+  await waitFor(() => expect(created.at(-1)?.cardSaving?.paymentMethodUsage).toBe('off_session'))
+  expect(created).toHaveLength(2)
 })
 
 it('does not remount when inline labels and appearance keep their values', async () => {
@@ -133,6 +183,25 @@ it('remounts when the card brand icon changes, because the provider sets it only
   await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
   view.rerender(createElement(Checkout, { label: 'Name', icon: 'right' }))
   await waitFor(() => expect(created.at(-1)?.appearance?.cardBrandIcon).toBe('right'))
+  expect(destroy).toHaveBeenCalled()
+})
+
+it('remounts when the wallet button type changes, because the wallets draw their buttons at mount', async () => {
+  const view = render(createElement(Checkout, { label: 'Name' }))
+  await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
+  view.rerender(createElement(Checkout, { label: 'Name', walletButtonType: 'buy' }))
+  await waitFor(() => expect(created.at(-1)?.appearance?.walletButtonType).toBe('buy'))
+  expect(destroy).toHaveBeenCalled()
+})
+
+it.each([
+  ['color', { walletButtonColor: 'white' as const }, 'walletButtonColor', 'white'],
+  ['radius', { walletButtonRadius: 0 }, 'walletButtonRadius', 0],
+] as const)('remounts when the wallet button %s changes', async (_, props, key, value) => {
+  const view = render(createElement(Checkout, { label: 'Name' }))
+  await waitFor(() => expect(hook.snapshot.state).toBe('ready'))
+  view.rerender(createElement(Checkout, { label: 'Name', ...props }))
+  await waitFor(() => expect(created.at(-1)?.appearance?.[key]).toBe(value))
   expect(destroy).toHaveBeenCalled()
 })
 

@@ -1,6 +1,7 @@
 import { z } from 'zod/v4'
+import type { SavingTerms, WalletAgreement } from './client/types.js'
 
-export const VERSION = '0.3.0'
+export const VERSION = '0.4.0'
 
 const USER_AGENT = `tapaya-checkout-js/${VERSION}`
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -66,23 +67,126 @@ export type CheckoutContactAddress = {
 export type CheckoutCustomer = {
   /** Customer email address. */
   email?: string | null
+  /** Customer contact name. */
+  name?: string | null
+  /** Customer contact phone. */
+  phone?: string | null
   /** Billing address. Send only the fields you collect. */
   billingAddress?: CheckoutContactAddress | null
   /** Shipping address. Send only the fields you collect. */
   shippingAddress?: CheckoutContactAddress | null
 }
 
-type CheckoutSessionFields = {
+export type CustomerCollectionMode = 'none' | 'optional' | 'required'
+
+/** Fields checkout collects. Omitted fields in an explicit policy mean none. */
+export type CustomerCollection = {
+  email?: CustomerCollectionMode
+  name?: CustomerCollectionMode
+  phone?: CustomerCollectionMode
+  billingAddress?: CustomerCollectionMode
+}
+
+/** A delivery choice. All amounts are minor units. */
+export type ShippingOption = {
+  /** Your option ID, such as `standard`. */
+  id: string
+  /** Name shown to the shopper. */
+  label: string
+  /** Delivery charge, included in `amount`. */
+  price: number
+  /** Final order total when the shopper picks this option, including `price` and `tax`. This is what gets charged. */
+  amount: number
+  /** Tax included in `amount`. Omit or use null for unspecified VAT; zero explicitly means no VAT. */
+  tax?: number | null
+  /** ISO 3166-1 alpha-2 destination countries, uppercase, such as `CZ`. */
+  countries: string[]
+}
+
+export type ShippingOptions = {
+  /** Price delivery per address: your server approves each quote revision. Omit for the fixed `options`. */
+  dynamic?: boolean
+  options?: ShippingOption[]
+  /** Hosted dynamic pricing only: where Tapaya posts a `ShippingQuoteRequest`. Never pass callback credentials to browser code. */
+  callbackUrl?: string | null
+  /** Hosted dynamic pricing only: 32 to 512 characters, for `verifyShippingQuoteSignature`. */
+  callbackSecret?: string | null
+}
+
+export type ShippingQuote = {
+  dynamic: boolean
+  revision: number
+  status: 'unquoted' | 'pending' | 'approved' | 'error' | 'accepted' | (string & {})
+  options: ShippingOption[]
+  selectedOptionId: string | null
+  /** Unix time in seconds. */
+  expiresAt: number | null
+  error: string | null
+  address: CheckoutContactAddress | null
+}
+
+export type ShippingQuoteApproval = {
+  revision: number
+  options: ShippingOption[]
+  selectedOptionId: string | null
+  /** Unix time in seconds. */
+  expiresAt: number
+  error?: 'unsupported_destination' | 'quote_error' | null
+}
+
+export type ShippingConfirmation = {
+  revision: number
+  amount: number
+  address: CheckoutContactAddress
+}
+
+/** Body delivered to the hosted merchant callback. Verify its signature before pricing. */
+export type ShippingQuoteRequest = {
+  paymentId: string
+  merchantOrderId: string
+  currency: string
+  revision: number
+  address: CheckoutContactAddress
+  selectedOptionId: string | null
+}
+
+/**
+ * Verify X-Tapaya-Quote-Signature against the exact, unparsed UTF-8 request body. A missing header returns false, so
+ * `request.headers.get('x-tapaya-quote-signature')` can be passed directly.
+ */
+export async function verifyShippingQuoteSignature(body: string, signature: string | null | undefined, secret: string): Promise<boolean> {
+  if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) return false
+  const key = await globalThis.crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
+  const bytes = Uint8Array.from(signature.match(/../g)!, value => Number.parseInt(value, 16))
+  return globalThis.crypto.subtle.verify('HMAC', key, bytes, new TextEncoder().encode(body))
+}
+
+/** Merchant-scoped saving instructions. Card details remain in Tapaya's secure fields. */
+export type CardSavingOptions = {
+  customerReference?: string | null
+  savePaymentMethod?: 'none' | 'optional' | 'required' | null
+  paymentMethodUsage?: 'on_session' | 'off_session' | null
+  /** Shown in the Apple Pay sheet. Requires saving with `paymentMethodUsage: 'off_session'`; without it Apple Pay cannot save off-session. */
+  walletAgreement?: WalletAgreement | null
+  /** Your consent wording and terms link, shown by hosted and embedded checkout. Requires `optional` or `required` saving. Tapaya does not translate `text`; hosted sessions with `text` require `locale`. */
+  savingTerms?: SavingTerms | null
+}
+
+type CheckoutSessionFields = CardSavingOptions & {
+  /** Manual authorizes a card without capturing funds. Not supported with shippingOptions. */
+  captureMethod?: 'automatic' | 'manual'
+  /** Allow increases to a manual authorization on the same payment. */
+  allowIncrementalAuthorization?: boolean
   /**
    * Your order reference, at most 200 characters. All payment attempts for this order, hosted or embedded, share it,
    * and at most one can succeed. A new session for the same unpaid order replaces the previous one.
    */
   merchantOrderId: string
-  /** Final total, including tax and shipping, in minor units: an integer between 1 and 2,147,483,647. */
+  /** Final total in integer minor units. Zero requires saving a new payment method. */
   amount: number
   /** Three-letter ISO 4217 currency code, such as `EUR`. Tapaya stores it uppercase. */
   currency: string
-  /** Language of the hosted page, such as `en`. Defaults to `en`. */
+  /** Language of the hosted page, such as `en`. Omit to use the browser language. */
   locale?: string | null
   /** Return URL after payment. Defaults to the URL in your Checkout settings. */
   successUrl?: string | null
@@ -92,10 +196,14 @@ type CheckoutSessionFields = {
   items?: CheckoutItem[] | null
   /** Tax included in `amount`, in minor units. */
   tax?: number | null
-  /** Shipping included in `amount`, in minor units. */
+  /** Shipping included in `amount`, in minor units. Omit or send null to hide it; zero means free shipping. */
   shipping?: number | null
   /** Customer details to prefill on the hosted page. */
   customer?: CheckoutCustomer | null
+  /** Null or omission uses merchant defaults; an empty object disables collection. */
+  customerCollection?: CustomerCollection | null
+  /** Opt in to server-approved shipping quotes. Omission keeps the fixed creation total. */
+  shippingOptions?: ShippingOptions | null
 }
 
 /** Send either `taxRate` or `taxBreakdown`, not both. */
@@ -129,10 +237,16 @@ export type CheckoutSessionStatus = 'open' | 'completed' | 'expired' | (string &
 
 /** Status of the latest payment attempt. New values may be added. */
 export type CheckoutPaymentStatus =
-  | 'unpaid' | 'successful' | 'failed' | 'cancelled' | 'action_needed' | (string & {})
+  | 'unpaid' | 'successful' | 'authorized' | 'failed' | 'cancelled' | 'action_needed' | (string & {})
 
 export type HostedCheckoutSession = {
+  paymentMethodId?: string | null
+  /** Methods the hosted page offers: `card`, `apple_pay`, `google_pay`. Returned on creation. */
+  paymentMethodTypes?: string[]
   mode: 'hosted'
+  /** Customer snapshot returned by session status. Absent on older responses and creation. */
+  customer?: CheckoutCustomer | null
+  shippingQuote?: ShippingQuote | null
   /** Session ID, such as `cs_Y7u2d`. */
   id: string
   /** Hosted payment page. Redirect to it unchanged. */
@@ -147,10 +261,10 @@ export type HostedCheckoutSession = {
   amount: number
   /** ISO 4217 currency code, uppercase. */
   currency: string
-  /** Tax included in `amount`, in minor units. `0` when not sent. */
-  tax: number
-  /** Shipping included in `amount`, in minor units. `0` when not sent. */
-  shipping: number
+  /** Tax included in `amount`, in minor units. Null when not supplied; zero explicitly means no VAT. */
+  tax: number | null
+  /** Shipping included in `amount`, in minor units. Null when not supplied; zero means free shipping. */
+  shipping: number | null
   /** Single tax rate in percentage points, or `null` when not sent. */
   taxRate: number | null
   /** Tax per rate. Empty when not sent. */
@@ -172,17 +286,17 @@ export type EmbeddedCheckoutSession = Omit<MerchantPayment, 'status'> & {
   mode: 'embedded'
   url: null
   /**
-   * `open` while the order can still be paid or a result is pending, `completed` once paid, and
+   * `open` while the order can still be paid or a result is pending, `completed` once paid or authorized, and
    * `ended` after a cancellation or a decline that allows no further attempt.
    */
   status: 'open' | 'completed' | 'ended'
-  paymentStatus: 'unpaid' | 'successful' | 'failed' | 'pending' | 'action_needed' | 'cancelled'
+  paymentStatus: 'unpaid' | 'successful' | 'authorized' | 'failed' | 'pending' | 'action_needed' | 'cancelled'
 }
 
 export type CheckoutSession = HostedCheckoutSession | EmbeddedCheckoutSession
 
 /** What your prepare endpoint returns to the browser SDK (`@tapayadot/checkout/client`). */
-export type { PreparedPayment } from './client/types.js'
+export type { PreparedPayment, SavingTerms, WalletAgreement } from './client/types.js'
 
 // Create params: catch programming mistakes and leave business rules to the API.
 const minorAmountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
@@ -198,10 +312,90 @@ const contactAddressSchema = z.object({
   country: z.string().nullish(),
 })
 
+const customerSchema = z.object({
+  email: z.string().nullish(),
+  name: z.string().nullish(),
+  phone: z.string().nullish(),
+  billingAddress: contactAddressSchema.nullish(),
+  shippingAddress: contactAddressSchema.nullish(),
+})
+const customerInputSchema = customerSchema.extend({
+  email: z.string().max(254).nullish(),
+  name: z.string().max(200).nullish(),
+  phone: z.string().max(30).nullish(),
+})
+const collectionModeSchema = z.enum(['none', 'optional', 'required'])
+const customerCollectionSchema = z.object({
+  email: collectionModeSchema.optional(),
+  name: collectionModeSchema.optional(),
+  phone: collectionModeSchema.optional(),
+  billingAddress: collectionModeSchema.optional(),
+})
+const shippingOptionSchema = z.object({
+  id: z.string().min(1).max(100).refine(value => Boolean(value.trim())), label: z.string().min(1).max(200).refine(value => Boolean(value.trim())),
+  price: minorAmountSchema, amount: z.number().int().positive().max(MAX_INT32), tax: minorAmountSchema.nullish().default(null),
+  countries: z.array(z.string().regex(/^[A-Z]{2}$/)).max(250),
+}).refine(option => option.price <= option.amount && (option.tax == null || option.tax <= option.amount), 'Shipping price and tax must be included in amount')
+const shippingOptionsSchema = z.object({
+  dynamic: z.boolean().optional(), options: z.array(shippingOptionSchema).max(50).optional(),
+  callbackUrl: z.string().nullish(), callbackSecret: z.string().min(32).max(512).nullish(),
+})
+// A response: accept new statuses and looser options than creation allows.
+const shippingQuoteSchema = z.object({
+  dynamic: z.boolean(), revision: z.number().int(), status: z.string(),
+  options: z.array(z.object({
+    id: z.string(), label: z.string(), price: z.number(), amount: z.number(), tax: z.number().nullish().default(null), countries: z.array(z.string()),
+  })),
+  selectedOptionId: z.string().nullable(), expiresAt: z.number().nullable(), error: z.string().nullable(), address: contactAddressSchema.nullable(),
+}) satisfies z.ZodType<ShippingQuote>
+const shippingApprovalSchema = z.object({
+  revision: z.number().int().positive(), options: z.array(shippingOptionSchema).max(50),
+  selectedOptionId: z.string().nullable(), expiresAt: z.number().int(),
+  error: z.enum(['unsupported_destination', 'quote_error']).nullish(),
+})
+const shippingConfirmationSchema = z.object({
+  revision: z.number().int().positive(), amount: z.number().int().positive().max(MAX_INT32), address: contactAddressSchema,
+})
+const walletAgreementSchema = z.object({
+  type: z.enum(['recurring', 'automatic_reload']),
+  description: z.string().min(1).max(200),
+  managementUrl: z.string().url().max(2048),
+  recurring: z.object({
+    amount: z.number().int().positive(), interval: z.enum(['day', 'week', 'month', 'year']),
+    intervalCount: z.number().int().positive().optional(), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  }).nullish(),
+  automaticReload: z.object({ amount: z.number().int().positive(), thresholdAmount: z.number().int().nonnegative() }).nullish(),
+}) satisfies z.ZodType<WalletAgreement>
+const savingTermsSchema = z.object({
+  text: z.string().max(1000).refine(value => value.trim().length > 0).nullish(),
+  url: z.string().url().startsWith('https://').max(2048).nullish(),
+}).refine(value => value.text != null || value.url != null, 'Supply text or url') satisfies z.ZodType<SavingTerms>
+const cardSavingFields = {
+  customerReference: z.string().min(1).max(200).refine(value => value.trim().length > 0).nullish(),
+  savePaymentMethod: z.enum(['none', 'optional', 'required']).nullish(),
+  paymentMethodUsage: z.enum(['on_session', 'off_session']).nullish(),
+  walletAgreement: walletAgreementSchema.nullish(),
+  savingTerms: savingTermsSchema.nullish(),
+}
+function validateCardSaving(value: CardSavingOptions, context: z.RefinementCtx) {
+  const saving = value.savePaymentMethod ?? 'none'
+  if (saving !== 'none' && !value.customerReference)
+    context.addIssue({ code: 'custom', path: ['customerReference'], message: 'A customer reference is required when saving a card' })
+  if (saving === 'none' && value.paymentMethodUsage != null)
+    context.addIssue({ code: 'custom', path: ['paymentMethodUsage'], message: 'Enable card saving before setting usage' })
+  if (value.walletAgreement != null && (saving === 'none' || value.paymentMethodUsage !== 'off_session'))
+    context.addIssue({ code: 'custom', path: ['walletAgreement'], message: 'A wallet agreement requires saving with off_session usage' })
+  if (value.savingTerms != null && saving === 'none')
+    context.addIssue({ code: 'custom', path: ['savingTerms'], message: 'Saving terms require optional or required saving' })
+}
+
 // Only the params type allows taxRate or taxBreakdown, not both. The API enforces it at runtime.
 const createSessionSchema = z.object({
+  ...cardSavingFields,
+  captureMethod: z.enum(['automatic', 'manual']).optional(),
+  allowIncrementalAuthorization: z.boolean().optional(),
   merchantOrderId: z.string().max(200).refine((value) => value.trim().length > 0),
-  amount: z.number().int().positive().max(MAX_INT32),
+  amount: z.number().int().nonnegative().max(MAX_INT32),
   currency: z.string().regex(/^[A-Za-z]{3}$/),
   locale: z.string().nullish(),
   successUrl: z.string().nullish(),
@@ -218,15 +412,28 @@ const createSessionSchema = z.object({
   shipping: minorAmountSchema.nullish(),
   taxRate: z.number().nonnegative().nullish(),
   taxBreakdown: taxBreakdownSchema.nullish(),
-  customer: z.object({
-    email: z.string().max(254).nullish(),
-    billingAddress: contactAddressSchema.nullish(),
-    shippingAddress: contactAddressSchema.nullish(),
-  }).nullish(),
+  customer: customerInputSchema.nullish(),
+  customerCollection: customerCollectionSchema.nullish(),
+  shippingOptions: shippingOptionsSchema.nullish(),
+}).superRefine((value, context) => {
+  validateCardSaving(value, context)
+  if (value.amount === 0 && (value.savePaymentMethod !== 'required' || value.shippingOptions != null))
+    context.addIssue({ code: 'custom', path: ['amount'], message: 'Zero-amount verification requires required saving without shipping' })
+  if (value.captureMethod === 'manual' && value.shippingOptions != null)
+    context.addIssue({ code: 'custom', path: ['shippingOptions'], message: 'Manual capture does not support shippingOptions' })
+  if (value.allowIncrementalAuthorization && value.captureMethod !== 'manual')
+    context.addIssue({ code: 'custom', path: ['captureMethod'], message: 'Incremental authorization requires manual capture' })
+  // Without a locale the hosted page follows the browser and could surround the text with another language.
+  if (value.savingTerms?.text != null && !value.locale?.trim())
+    context.addIssue({ code: 'custom', path: ['locale'], message: 'Set locale to the language of savingTerms.text' })
 }) satisfies z.ZodType<CheckoutSessionFields & { taxRate?: number | null, taxBreakdown?: TaxBreakdownEntry[] | null }>
 
 // Responses: check only what the SDK relies on, so new values and looser data do not break callers.
 const sessionSchema = z.object({
+  paymentMethodTypes: z.array(z.string()).optional(),
+  customer: customerSchema.nullish(),
+  shippingQuote: shippingQuoteSchema.nullish(),
+  paymentMethodId: z.string().nullable().optional(),
   id: z.string().min(1),
   url: z.string(),
   merchantOrderId: z.string(),
@@ -234,8 +441,8 @@ const sessionSchema = z.object({
   paymentStatus: z.string(),
   amount: z.number(),
   currency: z.string(),
-  tax: z.number().default(0),
-  shipping: z.number().default(0),
+  tax: z.number().nullable().default(null),
+  shipping: z.number().nullable().default(null),
   taxRate: z.number().nullable().default(null),
   taxBreakdown: z.array(z.object({ taxRate: z.number(), tax: z.number() })).default([]),
   items: z.array(z.object({
@@ -408,6 +615,9 @@ export class TapayaOrderMismatchError extends TapayaError {
 }
 
 export class Tapaya {
+  readonly paymentMethods: PaymentMethods
+  /** Saved-card payments: charge, authorize and capture, cancel, and refund. */
+  readonly payments: Payments
   readonly checkout: {
     readonly sessions: CheckoutSessions
     configuration(options?: PaymentRequestOptions): Promise<PaymentConfiguration>
@@ -433,8 +643,410 @@ export class Tapaya {
       ...options.embedded,
     }
     const sessions = new CheckoutSessions(client, () => new TapayaPayments(apiKey, embeddedOptions))
+    this.paymentMethods = new PaymentMethods(client)
+    this.payments = new Payments(client)
     this.checkout = { sessions, configuration: (requestOptions) => sessions.configuration(requestOptions) }
   }
+}
+
+export type SavedPaymentMethod = {
+  id: string
+  type: 'card'
+  customerReference: string
+  usage: 'on_session' | 'off_session'
+  card: {
+    brand: string
+    funding: string
+    last4: string
+    expMonth: number
+    expYear: number
+    cardholderName: string | null
+    country: string | null
+    /** The wallet that supplied the card, or null for a typed card. A device-bound method stops working when the shopper changes device. */
+    wallet: { type: 'apple_pay' | 'google_pay' | (string & {}), deviceBound: boolean } | null
+  }
+  /** Terms the shopper accepted in the wallet sheet, or null. */
+  walletAgreement?: WalletAgreement | null
+  /** Evidence of the latest consent that granted `usage`, or null when none is recorded. */
+  consent?: SavedPaymentMethodConsent | null
+  fingerprint: string
+  billingAddress: CheckoutContactAddress | null
+  status: 'active' | 'expired' | (string & {})
+  source: { type: 'checkout_session' | 'payment', id: string }
+  createdAt: string
+  updatedAt: string
+}
+export type SavedPaymentMethodConsent = {
+  /** `checkbox` when the shopper selected the saving checkbox, `merchant_asserted` for `required` saving, where you collected consent. */
+  type: 'checkbox' | 'merchant_asserted' | (string & {})
+  acceptedAt: string
+  /** Version of Tapaya's default saving wording. */
+  wordingVersion: string
+  savingTerms: SavingTerms | null
+  /** Shopper browser at confirmation, or null for a server confirmation. */
+  ipAddress: string | null
+  userAgent: string | null
+}
+export type SavedPaymentMethodPage = { data: SavedPaymentMethod[], nextCursor: string | null }
+export type UpdatePaymentMethod = {
+  expMonth?: number | null
+  expYear?: number | null
+  cardholderName?: string | null
+  billingAddress?: CheckoutContactAddress | null
+}
+const savedPaymentMethodSchema = z.object({
+  id: z.string().min(1), type: z.literal('card'), customerReference: z.string().min(1),
+  usage: z.enum(['on_session', 'off_session']),
+  card: z.object({
+    brand: z.string(), funding: z.string(), last4: z.string().regex(/^\d{4}$/),
+    expMonth: z.number().int().min(1).max(12), expYear: z.number().int(),
+    cardholderName: z.string().nullable(), country: z.string().nullable(),
+    wallet: z.object({ type: z.string(), deviceBound: z.boolean() }).nullable(),
+  }),
+  walletAgreement: walletAgreementSchema.nullish(),
+  consent: z.object({
+    type: z.string(), acceptedAt: z.string(), wordingVersion: z.string(),
+    savingTerms: z.object({ text: z.string().nullish(), url: z.string().nullish() }).nullable(),
+    ipAddress: z.string().nullable(), userAgent: z.string().nullable(),
+  }).nullish(),
+  fingerprint: z.string(), billingAddress: contactAddressSchema.nullable(), status: z.string(),
+  source: z.object({ type: z.enum(['checkout_session', 'payment']), id: z.string() }),
+  createdAt: z.string(), updatedAt: z.string(),
+}) satisfies z.ZodType<SavedPaymentMethod>
+const savedPaymentMethodPageSchema = z.object({ data: z.array(savedPaymentMethodSchema), nextCursor: z.string().nullable() })
+const updatePaymentMethodSchema = z.object({
+  expMonth: z.number().int().min(1).max(12).nullish(), expYear: z.number().int().min(2000).max(9999).nullish(),
+  cardholderName: z.string().max(200).nullish(), billingAddress: contactAddressSchema.strict().nullish(),
+}).strict()
+
+/** Server-only saved card lifecycle, authenticated with the same merchant as Checkout. */
+export class PaymentMethods {
+  constructor(private readonly client: HttpClient) {}
+
+  /** `wallet` lists only typed cards (`none`) or one wallet's methods. */
+  async list(params: { customerReference: string, limit?: number, cursor?: string, wallet?: 'none' | 'apple_pay' | 'google_pay' }, options: RequestOptions = {}): Promise<SavedPaymentMethodPage> {
+    const input = z.object({ customerReference: cardSavingFields.customerReference.unwrap().unwrap(),
+      limit: z.number().int().min(1).max(100).optional(), cursor: z.string().min(1).optional(),
+      wallet: z.enum(['none', 'apple_pay', 'google_pay']).optional(),
+    }).safeParse(params)
+    if (!input.success) throw new TapayaValidationError('Invalid saved card list parameters', fieldErrors(input.error))
+    const query = new URLSearchParams({ customerReference: input.data.customerReference })
+    if (input.data.limit !== undefined) query.set('limit', String(input.data.limit))
+    if (input.data.cursor !== undefined) query.set('cursor', input.data.cursor)
+    if (input.data.wallet !== undefined) query.set('wallet', input.data.wallet)
+    const response = await this.client.request('GET', `/merchant/saved-payment-methods?${query}`, options)
+    return this.parse(response, savedPaymentMethodPageSchema)
+  }
+
+  async get(id: string, options: RequestOptions = {}): Promise<SavedPaymentMethod> {
+    return this.parse(await this.client.request('GET', this.path(id), options), savedPaymentMethodSchema)
+  }
+
+  async update(id: string, params: UpdatePaymentMethod, options: RequestOptions = {}): Promise<SavedPaymentMethod> {
+    const input = updatePaymentMethodSchema.safeParse(params)
+    if (!input.success) throw new TapayaValidationError('Invalid saved card update', fieldErrors(input.error))
+    return this.parse(await this.client.request('PATCH', this.path(id), options, {
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(input.data),
+    }), savedPaymentMethodSchema)
+  }
+
+  async delete(id: string, options: RequestOptions = {}): Promise<{ id: string, deleted: true }> {
+    return this.parse(await this.client.request('DELETE', this.path(id), options), z.object({ id: z.literal(id), deleted: z.literal(true) }))
+  }
+
+  private path(id: string): string {
+    if (typeof id !== 'string' || !id.trim() || id.length > 200 || id === '.' || id === '..')
+      throw new TapayaValidationError('Invalid saved card ID')
+    return `/merchant/saved-payment-methods/${encodeURIComponent(id)}`
+  }
+  private parse<T>(response: HttpResponse, schema: z.ZodType<T>): T {
+    const result = schema.safeParse(response.body)
+    if (!result.success) throw new TapayaResponseError('Tapaya returned an invalid saved card response', response.status, response.headers)
+    return result.data
+  }
+}
+
+/** Normalized reason of a declined charge or operation. New values may be added. */
+export type DeclineReason =
+  | 'insufficient_funds' | 'card_expired' | 'authentication_required' | 'limit_exceeded' | 'fraud_suspected'
+  | 'do_not_retry' | 'card_declined' | 'processing_error' | (string & {})
+
+/**
+ * Status of a payment. `action_required`: the shopper must verify the saved card (see `nextAction`). `authorized`: a
+ * manual-capture authorization waiting for `capture` or `cancel`. `pending`: the outcome is not known yet; read the
+ * payment again. HTTP 200 alone never means the payment succeeded.
+ */
+export type PaymentStatus =
+  | 'ready' | 'pending' | 'action_required' | 'authorized' | 'successful' | 'declined' | 'cancelled'
+
+type SavedCardPaymentFields = {
+  /** Stable order reference, at most 200 characters. At most one payment per order succeeds. */
+  merchantOrderId: string
+  /** Integer minor units, between 1 and 2,147,483,647. */
+  amount: number
+  /** Uppercase three-letter ISO currency code. */
+  currency: string
+  /** Saved card to charge, from `paymentMethods.list`. */
+  paymentMethodId: string
+  /** `manual` authorizes only; capture or cancel it later. Defaults to `automatic`. */
+  captureMethod?: 'automatic' | 'manual'
+  /** Authorize an estimate that `increment` can raise. Requires `captureMethod: 'manual'`. */
+  allowIncrementalAuthorization?: boolean
+  /** Optional customer risk and billing details. */
+  customer?: CheckoutCustomer | null
+}
+
+/**
+ * The shopper is on your site, for example a one-click purchase. The payment returns `action_required`; finish it in
+ * the browser with Tapaya.js `handleNextAction({ clientSecret })`, or redirect the shopper to `nextAction.url`.
+ */
+export type CreateCustomerInitiatedPaymentParams = SavedCardPaymentFields & {
+  initiator: 'customer'
+  /**
+   * Where the hosted fallback page at `nextAction.url` returns the shopper, as `returnUrl?paymentId=…`. Must match an
+   * allowed checkout website. Required even when you use `handleNextAction`, which does not navigate.
+   */
+  returnUrl: string
+  merchantInitiatedReason?: never
+}
+
+/** The shopper is absent, for example a subscription renewal or a top-up. Tapaya charges the card at once. */
+export type CreateMerchantInitiatedPaymentParams = SavedCardPaymentFields & {
+  initiator: 'merchant'
+  /** `recurring` for a fixed series, `unscheduled` for top-ups and other variable charges. */
+  merchantInitiatedReason: 'recurring' | 'unscheduled'
+  returnUrl?: never
+}
+
+export type CreateSavedCardPaymentParams = CreateCustomerInitiatedPaymentParams | CreateMerchantInitiatedPaymentParams
+
+/** How the shopper completes an `action_required` payment. */
+export type PaymentNextAction = {
+  /** Always `three_d_secure`: the shopper verifies the saved card with their bank. */
+  type: 'three_d_secure'
+  /** Hosted fallback page for the same action, for emails or pages without Tapaya.js. Redirect with HTTP 303. */
+  url: string
+  /** After this time the payment is cancelled without a charge. */
+  expiresAt: string
+}
+
+/** A payment as your server reads it. Fulfill only after reading `successful` (or `authorized` for holds) here. */
+export type Payment = {
+  customer?: CheckoutCustomer | null
+  shippingQuote?: ShippingQuote | null
+  id: string
+  merchantOrderId: string
+  status: PaymentStatus
+  amount: number
+  currency: string
+  /** Whether the order accepts a new payment after this one's decline or cancellation. */
+  retryAllowed: boolean
+  /** Pass to Tapaya.js `handleNextAction` while `action_required`. Null for merchant-initiated payments and after expiry or revocation. Never log or persist it. */
+  clientSecret: string | null
+  paymentMethodId: string | null
+  initiator: 'customer' | 'merchant' | null
+  merchantInitiatedReason: 'recurring' | 'unscheduled' | null
+  captureMethod: 'automatic' | 'manual'
+  amountAuthorized: number
+  amountCaptured: number
+  amountRefunded: number
+  /** Capture an `authorized` payment before this time; Tapaya voids it afterwards. */
+  authorizationExpiresAt: string | null
+  /** Set while `action_required`. */
+  nextAction: PaymentNextAction | null
+  /** Set after a declined charge, or a declined increment of an authorization. */
+  declineReason: DeclineReason | null
+  createdAt: string
+}
+
+export type PaymentRefund = {
+  id: string
+  paymentId: string
+  amount: number
+  currency: string
+  status: 'pending' | 'succeeded' | 'failed' | (string & {})
+  reason: 'requested_by_customer' | 'duplicate' | 'fraudulent' | 'other' | (string & {})
+  createdAt: string
+}
+
+export type CreateRefundParams = {
+  /** Integer minor units. Omit to refund the rest of the captured amount. */
+  amount?: number
+  /** Defaults to `requested_by_customer`. */
+  reason?: 'requested_by_customer' | 'duplicate' | 'fraudulent' | 'other'
+}
+
+/** Every write needs an idempotency key. Store yours with the order to retry safely across processes. */
+export type PaymentWriteOptions = RequestOptions & {
+  /** Sent as `Idempotency-Key`, 1 to 255 printable ASCII characters without spaces. Defaults to a random UUID per call. */
+  idempotencyKey?: string
+}
+
+const nullishText = z.string().nullable()
+const savedCardPaymentSchema = z.object({
+  customer: customerSchema.nullish(),
+  shippingQuote: shippingQuoteSchema.nullish(),
+  id: z.string().min(1),
+  merchantOrderId: z.string(),
+  status: z.enum(['ready', 'pending', 'action_required', 'authorized', 'successful', 'declined', 'cancelled']),
+  amount: z.number().int().nonnegative(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  retryAllowed: z.boolean(),
+  clientSecret: nullishText,
+  paymentMethodId: nullishText.default(null),
+  initiator: z.enum(['customer', 'merchant']).nullable().default(null),
+  merchantInitiatedReason: z.enum(['recurring', 'unscheduled']).nullable().default(null),
+  captureMethod: z.enum(['automatic', 'manual']).default('automatic'),
+  amountAuthorized: z.number().int().nonnegative().default(0),
+  amountCaptured: z.number().int().nonnegative().default(0),
+  amountRefunded: z.number().int().nonnegative().default(0),
+  authorizationExpiresAt: nullishText.default(null),
+  nextAction: z.object({ type: z.literal('three_d_secure'), url: z.string(), expiresAt: z.string() }).nullable().default(null),
+  declineReason: nullishText.default(null),
+  createdAt: z.string(),
+}) satisfies z.ZodType<Payment, unknown>
+const refundSchema = z.object({
+  id: z.string().min(1), paymentId: z.string().min(1), amount: z.number().int().positive(), currency: z.string(),
+  status: z.string(), reason: z.string(), createdAt: z.string(),
+}) satisfies z.ZodType<PaymentRefund>
+const positiveAmount = z.number().int().positive().max(MAX_INT32)
+const createSavedCardPaymentSchema = z.object({
+  merchantOrderId: z.string().max(200).refine((value) => value.trim().length > 0),
+  amount: positiveAmount,
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  paymentMethodId: z.string().min(1).max(128),
+  initiator: z.enum(['customer', 'merchant']),
+  merchantInitiatedReason: z.enum(['recurring', 'unscheduled']).optional(),
+  captureMethod: z.enum(['automatic', 'manual']).optional(),
+  allowIncrementalAuthorization: z.boolean().optional(),
+  returnUrl: z.string().min(1).max(2048).optional(),
+  customer: customerInputSchema.nullish(),
+}).strict().superRefine((value, context) => {
+  if (value.initiator === 'customer' && !value.returnUrl)
+    context.addIssue({ code: 'custom', path: ['returnUrl'], message: 'A return URL is required when the shopper is present' })
+  if (value.initiator === 'customer' && value.merchantInitiatedReason)
+    context.addIssue({ code: 'custom', path: ['merchantInitiatedReason'], message: 'Only merchant-initiated payments have a reason' })
+  if (value.initiator === 'merchant' && !value.merchantInitiatedReason)
+    context.addIssue({ code: 'custom', path: ['merchantInitiatedReason'], message: 'Use recurring or unscheduled' })
+  if (value.initiator === 'merchant' && value.returnUrl)
+    context.addIssue({ code: 'custom', path: ['returnUrl'], message: 'Only customer-initiated payments return the shopper' })
+  if (value.allowIncrementalAuthorization && value.captureMethod !== 'manual')
+    context.addIssue({ code: 'custom', path: ['allowIncrementalAuthorization'], message: 'Requires captureMethod manual' })
+})
+
+/**
+ * Server-only payments on saved cards, with authorization, capture and refunds. Authenticated with the same merchant
+ * as Checkout. Writes retry safely under their idempotency key.
+ */
+export class Payments {
+  readonly refunds: {
+    create(paymentId: string, params?: CreateRefundParams, options?: PaymentWriteOptions): Promise<PaymentRefund>
+    list(paymentId: string, options?: RequestOptions): Promise<PaymentRefund[]>
+    get(paymentId: string, refundId: string, options?: RequestOptions): Promise<PaymentRefund>
+  }
+
+  constructor(private readonly client: HttpClient) {
+    this.refunds = {
+      create: async (paymentId, params = {}, options = {}) => {
+        const input = z.object({ amount: positiveAmount.optional(), reason: z.enum(['requested_by_customer', 'duplicate', 'fraudulent', 'other']).optional() })
+          .strict().safeParse(params)
+        if (!input.success) throw new TapayaValidationError('Invalid refund parameters', fieldErrors(input.error))
+        return this.parse(await this.write(`${this.path(paymentId)}/refunds`, input.data, options), refundSchema, 'refund')
+      },
+      list: async (paymentId, options = {}) =>
+        this.parse(await this.client.request('GET', `${this.path(paymentId)}/refunds`, options), z.object({ data: z.array(refundSchema) }), 'refund list').data,
+      get: async (paymentId, refundId, options = {}) =>
+        this.parse(await this.client.request('GET', `${this.path(paymentId)}/refunds/${this.segment(refundId, 'refundId')}`, options), refundSchema, 'refund'),
+    }
+  }
+
+  /**
+   * Prepare a new card payment or charge a saved card. A merchant-initiated payment is charged before this resolves. A customer-initiated one is
+   * `action_required`: pass its `clientSecret` to Tapaya.js `handleNextAction`, then read the payment again here.
+   */
+  async create(params: CreateSavedCardPaymentParams | CreatePayment, options: PaymentWriteOptions = {}): Promise<Payment> {
+    const input = params && 'paymentMethodId' in params
+      ? createSavedCardPaymentSchema.safeParse(params)
+      : createPaymentSchema.strict().safeParse(params)
+    if (!input.success) throw new TapayaValidationError('Invalid payment parameters', fieldErrors(input.error))
+    if ('returnUrl' in input.data && input.data.returnUrl !== undefined)
+      validateUrl(input.data.returnUrl, 'Invalid returnUrl', (message) => new TapayaValidationError(message, [{ field: 'returnUrl', message }]))
+    const payment = this.parsePayment(await this.write('/merchant/payments', input.data, options))
+    const quote = payment.shippingQuote
+    const selected = 'shippingOptions' in input.data && input.data.shippingOptions && quote && ['approved', 'accepted'].includes(quote.status)
+      ? quote.options.find(option => option.id === quote.selectedOptionId) : undefined
+    if (payment.merchantOrderId !== input.data.merchantOrderId || payment.amount !== (selected?.amount ?? input.data.amount) || payment.currency !== input.data.currency)
+      throw new TapayaResponseError('Payment does not match the order', 200)
+    return payment
+  }
+
+  async get(id: string, options: RequestOptions = {}): Promise<Payment> {
+    return this.forId(id, await this.client.request('GET', this.path(id), options))
+  }
+
+  /** Capture an `authorized` payment once. Omit the amount to capture everything authorized; a partial capture releases the rest. */
+  async capture(id: string, params: { amount?: number } = {}, options: PaymentWriteOptions = {}): Promise<Payment> {
+    const input = z.object({ amount: positiveAmount.optional() }).strict().safeParse(params)
+    if (!input.success) throw new TapayaValidationError('Invalid capture parameters', fieldErrors(input.error))
+    return this.forId(id, await this.write(`${this.path(id)}/capture`, input.data, options))
+  }
+
+  /** Raise an incremental authorization by `amount`. A declined increment keeps the original authorization and sets `declineReason`. */
+  async increment(id: string, params: { amount: number }, options: PaymentWriteOptions = {}): Promise<Payment> {
+    const input = z.object({ amount: positiveAmount }).strict().safeParse(params)
+    if (!input.success) throw new TapayaValidationError('Invalid increment parameters', fieldErrors(input.error))
+    return this.forId(id, await this.write(`${this.path(id)}/increment`, input.data, options))
+  }
+
+  /** Void an `authorized` payment, or cancel an `action_required` one. Refund a captured payment instead. */
+  async cancel(id: string, options: PaymentWriteOptions = {}): Promise<Payment> {
+    return this.forId(id, await this.write(`${this.path(id)}/cancel`, undefined, options))
+  }
+
+  private write(path: string, body: unknown, options: PaymentWriteOptions): Promise<HttpResponse> {
+    const { idempotencyKey = globalThis.crypto.randomUUID(), ...request } = options
+    if (typeof idempotencyKey !== 'string' || !/^[\x21-\x7e]{1,255}$/.test(idempotencyKey))
+      throw new TapayaValidationError('Invalid idempotency key', [{ field: 'idempotencyKey', message: 'Use 1 to 255 printable ASCII characters without spaces' }])
+    // The key and body are fixed before the first attempt, so automatic retries replay the same request.
+    return this.client.request('POST', path, request, {
+      headers: { 'idempotency-key': idempotencyKey, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+  }
+
+  private forId(id: string, response: HttpResponse): Payment {
+    const payment = this.parsePayment(response)
+    if (normalizePaymentId(payment.id) !== normalizePaymentId(id))
+      throw new TapayaResponseError('Payment identity does not match', response.status, response.headers)
+    return payment
+  }
+
+  private parsePayment(response: HttpResponse): Payment {
+    const payment = this.parse(response, savedCardPaymentSchema, 'payment')
+    if (payment.clientSecret !== null && payment.clientSecret.slice(0, 32) !== normalizePaymentId(payment.id))
+      throw new TapayaResponseError('Client secret does not match the payment', response.status, response.headers)
+    return payment
+  }
+
+  private path(id: string): string {
+    return `/merchant/payments/${this.segment(id, 'id')}`
+  }
+
+  private segment(value: string, field: string): string {
+    if (typeof value !== 'string' || !value.trim() || value.length > 200 || value === '.' || value === '..')
+      throw new TapayaValidationError(`Invalid ${field}`, [{ field, message: `Invalid ${field}` }])
+    return encodeURIComponent(value)
+  }
+
+  private parse<T>(response: HttpResponse, schema: z.ZodType<T, unknown>, what: string): T {
+    const result = schema.safeParse(response.body)
+    if (!result.success) throw new TapayaResponseError(`Tapaya returned an invalid ${what} response`, response.status, response.headers)
+    return result.data
+  }
+}
+
+function fieldErrors(error: z.ZodError): TapayaFieldError[] {
+  return error.issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message, code: issue.code }))
 }
 
 class CheckoutSessions {
@@ -491,18 +1103,19 @@ class CheckoutSessions {
     return parseSession(response)
   }
 
-  /** Alias for retrieve. Omitted mode selects hosted checkout. */
-  get(id: string, options?: RetrieveHostedSessionOptions): Promise<HostedCheckoutSession>
-  get(id: string, options: RetrieveEmbeddedSessionOptions): Promise<EmbeddedCheckoutSession>
-  get(id: string, options: RetrieveSessionOptions): Promise<CheckoutSession>
-  get(id: string, options: RetrieveSessionOptions = {}): Promise<CheckoutSession> {
-    return this.retrieve(id, options)
-  }
-
+  /** @deprecated Use `get`. */
   retrieve(id: string, options?: RetrieveHostedSessionOptions): Promise<HostedCheckoutSession>
   retrieve(id: string, options: RetrieveEmbeddedSessionOptions): Promise<EmbeddedCheckoutSession>
   retrieve(id: string, options: RetrieveSessionOptions): Promise<CheckoutSession>
-  async retrieve(id: string, options: RetrieveSessionOptions = {}): Promise<CheckoutSession> {
+  retrieve(id: string, options: RetrieveSessionOptions = {}): Promise<CheckoutSession> {
+    return this.get(id, options)
+  }
+
+  /** Read a session. Omitted mode selects hosted checkout. */
+  get(id: string, options?: RetrieveHostedSessionOptions): Promise<HostedCheckoutSession>
+  get(id: string, options: RetrieveEmbeddedSessionOptions): Promise<EmbeddedCheckoutSession>
+  get(id: string, options: RetrieveSessionOptions): Promise<CheckoutSession>
+  async get(id: string, options: RetrieveSessionOptions = {}): Promise<CheckoutSession> {
     validateCheckoutMode(options.mode)
     if (options.mode === 'embedded') {
       validateEmbeddedRequestOptions(options)
@@ -527,9 +1140,13 @@ class CheckoutSessions {
    * call on every page load and every submission: lost responses replay the same attempt.
    */
   async prepare(order: CreatePayment, options: PaymentRequestOptions = {}): Promise<EmbeddedCheckoutSession> {
-    const existing = await this.verify(order, options)
-    if (existing && !((existing.paymentStatus === 'failed' || existing.paymentStatus === 'cancelled') && existing.retryAllowed)) return existing
-    let key = `${order.merchantOrderId}:${existing ? `after:${existing.id}` : 'initial'}`
+    const existing = await this.findByOrder(order?.merchantOrderId, options)
+    const shipping = order.shippingOptions != null || existing?.shippingQuote != null
+    if (existing && !shipping && (existing.amount !== order.amount || existing.currency !== order.currency)) throw new TapayaOrderMismatchError(existing.id)
+    // A quote may change the read total. Replay creation so the backend verifies the immutable input hash instead.
+    if (existing && !shipping && !((existing.paymentStatus === 'failed' || existing.paymentStatus === 'cancelled') && existing.retryAllowed)) return existing
+    const retry = existing && (existing.paymentStatus === 'failed' || existing.paymentStatus === 'cancelled') && existing.retryAllowed
+    let key = `${order.merchantOrderId}:${existing ? `${retry ? 'after' : 'validate'}:${existing.id}` : 'initial'}`
     // Preserve existing keys for replay, and hash references that cannot be HTTP header values.
     if (/[^\x21-\x7e]/.test(key)) {
       const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))
@@ -544,7 +1161,7 @@ class CheckoutSessions {
   /**
    * Read the order's current embedded session, or `null` before one exists. Throws
    * `TapayaOrderMismatchError` when its order ID, amount, or currency differ from `order`.
-   * Fulfill only when the result has `status: 'completed'`.
+   * Fulfill paid orders only when `paymentStatus` is `successful`. `authorized` is an uncaptured hold.
    */
   async verify(order: Pick<CreatePayment, 'merchantOrderId' | 'amount' | 'currency'>, options: PaymentRequestOptions = {}): Promise<EmbeddedCheckoutSession | null> {
     const session = await this.findByOrder(order?.merchantOrderId, options)
@@ -562,7 +1179,7 @@ class CheckoutSessions {
   }
 
   /** Confirm an embedded checkout once using a token from the browser card fields. */
-  async confirm(id: string, token: string, options: PaymentRequestOptions = {}): Promise<EmbeddedCheckoutSession> {
+  async confirm(id: string, token: string, options: PaymentConfirmationOptions = {}): Promise<EmbeddedCheckoutSession> {
     validateEmbeddedRequestOptions(options)
     return embeddedSession(await this.#embedded().confirm(id, token, options))
   }
@@ -570,6 +1187,12 @@ class CheckoutSessions {
   async recover(id: string, options: PaymentRequestOptions = {}): Promise<EmbeddedCheckoutSession> {
     validateEmbeddedRequestOptions(options)
     return embeddedSession(await this.#embedded().recover(id, options))
+  }
+
+  /** Approve an embedded payment's pending shipping revision from your server. */
+  async approveShippingQuote(id: string, approval: ShippingQuoteApproval, options: PaymentRequestOptions = {}): Promise<ShippingQuote> {
+    validateEmbeddedRequestOptions(options)
+    return this.#embedded().approveShippingQuote(id, approval, options)
   }
 
   async revokeClientSecret(id: string, options: PaymentRequestOptions = {}): Promise<void> {
@@ -596,7 +1219,7 @@ function embeddedSession(payment: MerchantPayment): EmbeddedCheckoutSession {
     ...fields,
     mode: 'embedded',
     url: null,
-    status: paymentStatus === 'successful'
+    status: paymentStatus === 'successful' || paymentStatus === 'authorized'
       ? 'completed'
       : (paymentStatus === 'cancelled' || paymentStatus === 'declined') && !fields.retryAllowed ? 'ended' : 'open',
     paymentStatus: paymentStatus === 'ready' ? 'unpaid' : paymentStatus === 'declined' ? 'failed' : paymentStatus === 'action_required' ? 'action_needed' : paymentStatus,
@@ -829,28 +1452,37 @@ function validateUrl(
   return url
 }
 
-/** Authoritative status of an embedded payment attempt. HTTP 200 alone does not mean payment succeeded. */
-export type PaymentStatus =
-  | 'ready' | 'successful' | 'declined' | 'pending' | 'action_required' | 'cancelled'
-
 export type PaymentAddress = CheckoutContactAddress
 
-export type CreatePayment = {
+export type CreatePayment = CardSavingOptions & {
+  /** Manual authorizes a new card without capturing funds. Not supported with shippingOptions. */
+  captureMethod?: 'automatic' | 'manual'
+  allowIncrementalAuthorization?: boolean
+  /** Required for manual capture. Must match an allowed checkout website. */
+  returnUrl?: string
   /** Stable order reference, at most 200 characters. */
   merchantOrderId: string
-  /** Final total in integer minor units, between 1 and 2,147,483,647. */
+  /** Integer minor units. Zero verifies and saves a new card with required saving. */
   amount: number
   /** Uppercase three-letter ISO currency code. */
   currency: string
   /** Optional customer risk and billing details. Omit fields you do not collect. */
   customer?: CheckoutCustomer | null
+  /** Null or omission uses merchant defaults; an empty object disables collection. */
+  customerCollection?: CustomerCollection | null
+  shippingOptions?: ShippingOptions | null
 }
 
 export type MerchantPayment = {
+  /** Accepted customer snapshot, or merchant input before submission. Absent on older responses. */
+  customer?: CheckoutCustomer | null
+  shippingQuote?: ShippingQuote | null
+  paymentMethodId?: string | null
   id: string
   merchantOrderId: string
   amount: number
   currency: string
+  /** Authoritative status of an embedded payment attempt. */
   status: PaymentStatus
   retryAllowed: boolean
   /** Pass to the browser only. Null after expiry or revocation; server status reads still work. Never log or persist it. */
@@ -867,28 +1499,51 @@ export type PaymentConfiguration = {
 
 /** Embedded requests never retry automatically, including charge submissions. */
 export type PaymentRequestOptions = Pick<RequestOptions, 'signal' | 'timeoutMs' | 'merchantToken'>
+export type PaymentConfirmationOptions = PaymentRequestOptions & {
+  /** Optional saving only, after the shopper selects the supplied consent wording. */
+  saveCard?: boolean
+  customer?: CheckoutCustomer | null
+  shippingQuote?: ShippingConfirmation | null
+}
 export type TapayaPaymentsOptions = Pick<PaymentRequestOptions, 'timeoutMs' | 'merchantToken'> & {
   baseUrl?: string
   fetch?: typeof fetch
 }
 
 const createPaymentSchema = z.object({
+  ...cardSavingFields,
+  captureMethod: z.enum(['automatic', 'manual']).optional(),
+  allowIncrementalAuthorization: z.boolean().optional(),
+  returnUrl: z.string().url().max(2048).optional(),
   merchantOrderId: z.string().max(200).refine((value) => value.trim().length > 0),
-  amount: z.number().int().positive().max(MAX_INT32),
+  amount: z.number().int().nonnegative().max(MAX_INT32),
   currency: z.string().regex(/^[A-Z]{3}$/),
-  customer: z.object({
-    email: z.string().max(254).nullish(),
-    billingAddress: contactAddressSchema.nullish(),
-    shippingAddress: contactAddressSchema.nullish(),
-  }).nullish(),
+  customer: customerInputSchema.nullish(),
+  customerCollection: customerCollectionSchema.nullish(),
+  shippingOptions: shippingOptionsSchema.nullish(),
+}).superRefine((value, context) => {
+  validateCardSaving(value, context)
+  if (value.captureMethod === 'manual') {
+    if (!value.returnUrl)
+      context.addIssue({ code: 'custom', path: ['returnUrl'], message: 'New-card manual capture requires returnUrl' })
+    if (value.shippingOptions != null)
+      context.addIssue({ code: 'custom', path: ['shippingOptions'], message: 'Manual capture does not support shippingOptions' })
+  } else if (value.allowIncrementalAuthorization || value.returnUrl !== undefined) {
+    context.addIssue({ code: 'custom', path: ['captureMethod'], message: 'Incremental authorization and returnUrl require manual capture' })
+  }
+  if (value.amount === 0 && (value.savePaymentMethod !== 'required' || value.shippingOptions != null))
+    context.addIssue({ code: 'custom', path: ['amount'], message: 'Zero-amount verification requires required saving without shipping' })
 }) satisfies z.ZodType<CreatePayment>
 
 const merchantPaymentSchema = z.object({
+  customer: customerSchema.nullish(),
+  shippingQuote: shippingQuoteSchema.nullish(),
+  paymentMethodId: z.string().nullable().optional(),
   id: z.string().min(1),
   merchantOrderId: z.string(),
-  amount: z.number().int().positive().max(MAX_INT32),
+  amount: z.number().int().nonnegative().max(MAX_INT32),
   currency: z.string().regex(/^[A-Z]{3}$/),
-  status: z.enum(['ready', 'successful', 'declined', 'pending', 'action_required', 'cancelled']),
+  status: z.enum(['ready', 'successful', 'authorized', 'declined', 'pending', 'action_required', 'cancelled']),
   retryAllowed: z.boolean(),
   clientSecret: z.string().regex(/^[0-9a-f]{32}_secret_[A-Za-z0-9-]{1,32}_[A-Za-z0-9_-]{43}$/).nullable(),
 }) satisfies z.ZodType<MerchantPayment>
@@ -948,12 +1603,17 @@ export class TapayaPayments {
         field: issue.path.join('.'), message: issue.message, code: issue.code,
       })))
     }
+    if (params.data.returnUrl !== undefined)
+      validateUrl(params.data.returnUrl, 'Invalid returnUrl', (message) => new TapayaValidationError(message, [{ field: 'returnUrl', message }]))
     if (typeof idempotencyKey !== 'string' || !/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
       throw new TapayaValidationError('Invalid idempotency key', [{ field: 'idempotencyKey', message: 'Use 1 to 255 printable ASCII characters without spaces' }])
     }
     const response = await this.#request('', options, params.data, idempotencyKey)
     const result = this.#parse(response)
-    if (result.merchantOrderId !== params.data.merchantOrderId || result.amount !== params.data.amount || result.currency !== params.data.currency) {
+    const quote = result.shippingQuote
+    const selected = params.data.shippingOptions && quote && ['approved', 'accepted'].includes(quote.status)
+      ? quote.options.find(option => option.id === quote.selectedOptionId) : undefined
+    if (result.merchantOrderId !== params.data.merchantOrderId || result.amount !== (selected?.amount ?? params.data.amount) || result.currency !== params.data.currency) {
       throw this.#responseError(response, 'Payment does not match the order')
     }
     return result
@@ -978,12 +1638,25 @@ export class TapayaPayments {
   }
 
   /** Submit the token once. Recover the original payment after a lost response. */
-  async confirm(id: string, token: string, options: PaymentRequestOptions = {}): Promise<MerchantPayment> {
+  async confirm(id: string, token: string, options: PaymentConfirmationOptions = {}): Promise<MerchantPayment> {
     validatePaymentReference(id, 'id')
     if (typeof token !== 'string' || !token.trim() || token.length > 255) {
       throw new TapayaValidationError('Invalid card token', [{ field: 'token', message: 'Use a nonblank token of at most 255 characters' }])
     }
-    return this.#forId(id, await this.#request(`/${encodeURIComponent(id)}/confirm`, options, { token, paymentMethod: 'card' }))
+    const details = z.object({ saveCard: z.boolean().optional(), customer: customerInputSchema.nullish(), shippingQuote: shippingConfirmationSchema.nullish() }).safeParse(options)
+    if (!details.success) throw new TapayaValidationError('Invalid confirmation details', details.error.issues.map(issue => ({ field: issue.path.join('.'), message: issue.message })))
+    return this.#forId(id, await this.#request(`/${encodeURIComponent(id)}/confirm`, options, { token, paymentMethod: 'card', ...details.data }))
+  }
+
+  async approveShippingQuote(id: string, approval: ShippingQuoteApproval, options: PaymentRequestOptions = {}): Promise<ShippingQuote> {
+    validatePaymentReference(id, 'id')
+    const input = shippingApprovalSchema.safeParse(approval)
+    if (!input.success) throw new TapayaValidationError('Invalid shipping quote approval', input.error.issues.map(issue => ({ field: issue.path.join('.'), message: issue.message })))
+    const response = await this.#request(`/${encodeURIComponent(id)}/shipping-quote`, options, input.data)
+    const quote = shippingQuoteSchema.safeParse(response.body)
+    if (!quote.success) throw this.#responseError(response, 'Invalid shipping quote response')
+    if (quote.data.revision !== approval.revision) throw this.#responseError(response, 'Shipping quote revision does not match')
+    return quote.data
   }
 
   async recover(id: string, options: PaymentRequestOptions = {}): Promise<MerchantPayment> {

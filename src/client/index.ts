@@ -1,5 +1,5 @@
-import { PaymentError } from './errors.js'
-import type { LoadOptions, Payments } from './types.js'
+import { PaymentError, toPaymentError } from './errors.js'
+import type { LoadOptions, Payment, Payments } from './types.js'
 import { SCRIPT_VERSION, MIN_SCRIPT_VERSION } from './version.js'
 export { PaymentError } from './errors.js'
 export type * from './types.js'
@@ -81,5 +81,48 @@ export function loadTapaya(publishableKey: string, options: LoadOptions = {}): P
     loading.set(src, pending)
     pending.catch(() => loading.delete(src))
   }
-  return pending.then((factory) => factory(publishableKey, { apiOrigin: options.apiOrigin }))
+  return pending.then((factory) => {
+    try {
+      return wrap(factory(publishableKey, { apiOrigin: options.apiOrigin }))
+    } catch (error) {
+      throw toPaymentError(error)
+    }
+  })
+}
+
+/** Rethrow the hosted bundle's errors as this package's PaymentError, so `instanceof PaymentError` holds. */
+function guard<T>(work: () => T): T {
+  try {
+    const value = work()
+    return (value instanceof Promise ? value.catch((error: unknown) => { throw toPaymentError(error) }) : value) as T
+  } catch (error) {
+    throw toPaymentError(error)
+  }
+}
+
+function wrap(payments: Payments): Payments {
+  return {
+    get version() {
+      return payments.version
+    },
+    createPayment: (options) => wrapPayment(guard(() => payments.createPayment(options))),
+    handleNextAction: (options) => guard(() => payments.handleNextAction(options)),
+  }
+}
+
+function wrapPayment(payment: Payment): Payment {
+  return {
+    get clientSecret() {
+      return payment.clientSecret
+    },
+    get snapshot() {
+      return payment.snapshot
+    },
+    subscribe: (listener) => guard(() => payment.subscribe(listener)),
+    mount: (target) => guard(() => payment.mount(target)),
+    submit: (input) => guard(() => payment.submit(input)),
+    recover: () => guard(() => payment.recover()),
+    update: (options) => guard(() => payment.update(options)),
+    destroy: () => guard(() => payment.destroy()),
+  }
 }

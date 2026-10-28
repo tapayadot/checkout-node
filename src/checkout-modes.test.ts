@@ -30,6 +30,26 @@ afterEach(() => {
 })
 
 describe('checkout modes', () => {
+  it.each([0, 1200])('completes an embedded session when its payment for %i is authorized', async (amount) => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ ...payment, amount, status: 'authorized' }));
+    const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions;
+    const input = { ...order, amount, mode: 'embedded' as const,
+      ...(amount === 0 ? { customerReference: 'buyer', savePaymentMethod: 'required' as const, paymentMethodUsage: 'off_session' as const } : {}),
+      captureMethod: 'manual' as const, allowIncrementalAuthorization: true, returnUrl: 'https://example.com/return' };
+    expect(await sessions.create(input)).toMatchObject({ status: 'completed', paymentStatus: 'authorized' });
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ captureMethod: 'manual', allowIncrementalAuthorization: true });
+  });
+
+  it.each(['hosted', 'embedded'] as const)('rejects shipping with manual capture in %s checkout before fetching', async (mode) => {
+    const fetcher = vi.fn();
+    const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions;
+    await expect(sessions.create({ ...order, mode, captureMethod: 'manual',
+      ...(mode === 'embedded' ? { returnUrl: 'https://example.com/return' } : {}),
+      shippingOptions: { dynamic: true, callbackUrl: 'https://example.com/quote', callbackSecret: 's'.repeat(32) },
+    })).rejects.toBeInstanceOf(TapayaValidationError);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('uses one organization secret with merchant selectors in both checkout modes', async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(Response.json(hosted))
@@ -40,7 +60,7 @@ describe('checkout modes', () => {
     }).checkout.sessions
     await sessions.create(order)
     await sessions.create({ ...order, mode: 'embedded' }, { merchantToken: 'second-merchant' })
-    await sessions.retrieve(hosted.id, { merchantToken: 'third-merchant' })
+    await sessions.get(hosted.id, { merchantToken: 'third-merchant' })
     expect(fetcher.mock.calls.map(([, init]) => init.headers['X-Tapaya-Merchant-Token'])).toEqual([
       'first-merchant', 'second-merchant', 'third-merchant',
     ])
@@ -95,16 +115,16 @@ describe('checkout modes', () => {
     ])
   })
 
-  it('retrieves each mode explicitly and preserves get as an alias', async () => {
+  it('reads each mode explicitly and preserves retrieve as an alias', async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(Response.json(hosted))
       .mockResolvedValueOnce(Response.json(payment))
       .mockResolvedValueOnce(Response.json(payment))
     const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
-    expect((await sessions.retrieve(hosted.id)).mode).toBe('hosted')
-    const embedded = await sessions.retrieve(payment.id, { mode: 'embedded' })
+    expect((await sessions.get(hosted.id)).mode).toBe('hosted')
+    const embedded = await sessions.get(payment.id, { mode: 'embedded' })
     expectTypeOf(embedded).toEqualTypeOf<EmbeddedCheckoutSession>()
-    expect(await sessions.get(payment.id, { mode: 'embedded' })).toEqual(embedded)
+    expect(await sessions.retrieve(payment.id, { mode: 'embedded' })).toEqual(embedded)
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       `https://api.sandbox.tapaya.com/merchant/checkout-sessions/${hosted.id}`,
       `https://api.sandbox.tapaya.com/merchant/payments/${payment.id}`,
@@ -123,7 +143,7 @@ describe('checkout modes', () => {
   ])('maps %s without treating a missing browser secret as cancellation', async (status, sessionStatus, paymentStatus, retryAllowed = false) => {
     const fetcher = vi.fn().mockResolvedValue(Response.json({ ...payment, status, retryAllowed, clientSecret: null }))
     const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
-    expect(await sessions.retrieve(payment.id, { mode: 'embedded' })).toMatchObject({
+    expect(await sessions.get(payment.id, { mode: 'embedded' })).toMatchObject({
       status: sessionStatus, paymentStatus, clientSecret: null,
     })
   })
@@ -222,7 +242,7 @@ describe('checkout modes', () => {
     const fetcher = vi.fn().mockRejectedValue(new TypeError('offline'))
     const sessions = new Tapaya('secret', { fetch: fetcher, maxRetries: 5 }).checkout.sessions
     await expect(sessions.create({ ...order, mode: 'embedded' })).rejects.toBeInstanceOf(TapayaConnectionError)
-    await expect(sessions.retrieve(payment.id, { mode: 'embedded' })).rejects.toBeInstanceOf(TapayaConnectionError)
+    await expect(sessions.get(payment.id, { mode: 'embedded' })).rejects.toBeInstanceOf(TapayaConnectionError)
     await expect(sessions.confirm(payment.id, 'tok_test')).rejects.toBeInstanceOf(TapayaConnectionError)
     expect(fetcher).toHaveBeenCalledTimes(3)
   })
@@ -246,15 +266,15 @@ describe('checkout modes', () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout')
     const fetcher = vi.fn().mockImplementation(async () => Response.json(payment))
     const defaults = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
-    await defaults.retrieve(payment.id, { mode: 'embedded' })
+    await defaults.get(payment.id, { mode: 'embedded' })
     expect(timeout).toHaveBeenLastCalledWith(35_000)
     const shared = new Tapaya('secret', { fetch: fetcher, timeoutMs: 900 }).checkout.sessions
-    await shared.retrieve(payment.id, { mode: 'embedded' })
+    await shared.get(payment.id, { mode: 'embedded' })
     expect(timeout).toHaveBeenLastCalledWith(900)
     const overridden = new Tapaya('secret', { fetch: fetcher, timeoutMs: 900, embedded: { timeoutMs: 1000 } }).checkout.sessions
-    await overridden.retrieve(payment.id, { mode: 'embedded' })
+    await overridden.get(payment.id, { mode: 'embedded' })
     expect(timeout).toHaveBeenLastCalledWith(1000)
-    await overridden.retrieve(payment.id, { mode: 'embedded', timeoutMs: 2000 })
+    await overridden.get(payment.id, { mode: 'embedded', timeoutMs: 2000 })
     expect(timeout).toHaveBeenLastCalledWith(2000)
   })
 
@@ -262,7 +282,7 @@ describe('checkout modes', () => {
     const fetcher = vi.fn()
     const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
     await expect(sessions.create({ ...order, mode: 'other' } as unknown as CreateCheckoutSessionParams)).rejects.toBeInstanceOf(TapayaValidationError)
-    await expect(sessions.retrieve(payment.id, { mode: 'other' } as unknown as RetrieveEmbeddedSessionOptions)).rejects.toBeInstanceOf(TapayaValidationError)
+    await expect(sessions.get(payment.id, { mode: 'other' } as unknown as RetrieveEmbeddedSessionOptions)).rejects.toBeInstanceOf(TapayaValidationError)
     await expect(sessions.create({ ...order, mode: 'embedded', items: [] } as CreateCheckoutSessionParams)).rejects.toBeInstanceOf(TapayaValidationError)
     await expect(sessions.create({ ...order, mode: 'embedded' }, { maxRetries: 1 } as CreateEmbeddedSessionOptions)).rejects.toBeInstanceOf(TapayaValidationError)
     expect(fetcher).not.toHaveBeenCalled()
