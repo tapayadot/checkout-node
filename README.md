@@ -2,7 +2,7 @@
 
 ![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-green) ![TypeScript](https://img.shields.io/badge/TypeScript-supported-blue) [![npm](https://img.shields.io/npm/v/%40tapayadot%2Fcheckout)](https://www.npmjs.com/package/@tapayadot/checkout) [![Docs](https://img.shields.io/badge/docs-tapaya.com-blue)](https://docs.tapaya.com/online) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.3.0.
+TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.4.0.
 Create a Checkout session for an order, redirect the customer to the Tapaya-hosted payment page, and verify the
 payment on your server before fulfilling the order. For embedded card fields, the same package provides the browser
 SDK (`@tapayadot/checkout/client`) and a React hook (`@tapayadot/checkout/react`).
@@ -20,11 +20,35 @@ npm install @tapayadot/checkout
 
 For setup and integration guides, see the [documentation](#documentation).
 
+## Upgrade from 0.3.x
+
+- The browser loader loads Tapaya.js `0.3.0`, which supports customer collection and shipping quotes.
+  If your page includes the script tag itself, use `/checkout/0.3.0/checkout.js`.
+  The loader rejects older scripts without saved-card support.
+- Set `customerCollection` when creating an embedded payment or hosted session
+  to choose the contact and billing fields to collect. Payment reads preserve
+  the returned `customer` details.
+- Payment errors use specific codes instead of `validation` and `wallet`.
+  If you branch on those values, map them as follows and keep a default branch:
+  - `validation` becomes `cardholder_required`, `card_invalid`,
+    `customer_details_invalid`, `currency_mismatch`, `amount_mismatch`, or a
+    `shipping_*` code.
+  - `wallet` becomes `wallet_session_ended` or `wallet_authorization_failed`.
+  - A rejected wallet tokenization or 3DS check now reports `tokenization` or
+    `authentication` instead of `frame`.
+
+  `PaymentError` and `snapshot.error` can include `details`. See
+  [errors](#payment-errors) for the full list.
+- Hosted session `tax` and `shipping` are now `number | null`. They are `null`
+  when the session was created without them, instead of `0`. Treat `null` as
+  "not shown" and `0` as explicitly no VAT or free shipping.
+- `checkout.sessions.retrieve` is deprecated. Use `get`, which every resource uses.
+- `PaymentStatus` now also includes `authorized`, for manual-capture payments in hosted and embedded checkout.
+
 ## Upgrade from 0.2.x
 
-- The browser loader now loads Tapaya.js 0.2.0, which adds Apple Pay and Google Pay. It refuses an
-  already loaded Tapaya.js 0.1.x. If your page includes the script tag itself, change it to
-  `/checkout/0.2.0/checkout.js`.
+- Tapaya.js 0.2.0 introduced Apple Pay and Google Pay. Use the current
+  `/checkout/0.3.0/checkout.js` path when upgrading.
 - `environment: 'production'` now runs embedded checkout against `https://api.tapaya.com` instead
   of throwing. `configuration()` returns `environment: 'production'` with live keys.
 - Without `environment` or `TAPAYA_ENVIRONMENT`, a `tapaya_live_` key now selects production. A live key
@@ -40,13 +64,11 @@ For setup and integration guides, see the [documentation](#documentation).
   Use `HostedCheckoutSession` for hosted-only annotations, or check `session.mode` before
   accessing mode-specific fields. Hosted responses now include `mode: 'hosted'`.
 - Existing `checkout.sessions.create(...)` and `get(id)` calls still default to hosted checkout.
-  `retrieve(id)` is also available.
 - Import browser code from `@tapayadot/checkout/client` and the React hook from
   `@tapayadot/checkout/react`. The root entry is for server code.
 
-The browser loader targets Tapaya.js at `/checkout/0.2.0/checkout.js` on
+The browser loader targets Tapaya.js at `/checkout/0.3.0/checkout.js` on
 `https://js.tapaya.com`. Its version does not follow this package's server releases.
-Set `origin` to your local Tapaya.js server for local testing.
 
 ## Quick start
 
@@ -86,6 +108,46 @@ const session = await tapaya.checkout.sessions.create(
 // Save session.id with the order, then redirect with the URL exactly as returned.
 return Response.redirect(session.url, 303)
 ```
+
+To collect contact details, add a policy to the creation request:
+
+```ts
+customerCollection: {
+  email: 'required',
+  name: 'optional',
+  phone: 'optional',
+  billingAddress: 'none',
+}
+```
+
+Each field accepts `none`, `optional`, or `required`. Omit the policy or pass
+`null` to use merchant defaults. Pass `{}` to disable collection. The same policy
+works with embedded payments. Read the accepted details from `current.customer`
+after retrieving a hosted session or merchant payment. These are shopper-supplied
+details, not verified identity.
+
+Option `tax` may be omitted or null for unspecified VAT, or zero to explicitly report no VAT.
+
+For delivery selection, pass `shippingOptions` at creation. Each option contains
+`id`, `label`, `price`, the complete final `amount`, included `tax`, and allowed
+`countries`. Set `dynamic: true` for merchant-approved quotes. Hosted dynamic
+shipping additionally requires a server-only `callbackUrl` and `callbackSecret`.
+`verifyShippingQuoteSignature()` verifies the callback's exact raw body before
+you parse it. Never expose the callback secret to browser code.
+
+Read the selected option through `shippingQuote`. For embedded dynamic pricing,
+your backend approves a pending revision with
+`checkout.sessions.approveShippingQuote(paymentId, approval)`. The browser's
+`onShippingAddressChange` and `onShippingOptionChange` handlers resolve after that
+approval; their return values cannot set a total. Update your Pay label from
+`onShippingQuoteChange` or `snapshot.shippingQuote`. React forwards these handlers
+without remounting the fields when their functions change.
+
+Card checkout stops for review if obtaining a delivery quote changes the displayed
+total during submission. Confirmation and recovery use the accepted quote revision
+and total. `checkout.sessions.prepare()` checks immutable creation input through
+backend replay when quotes change the read amount. Fulfillment must compare the
+payment with the final total approved and stored by your backend.
 
 When the customer returns to your success or cancel URL, get the session and compare it with the stored order.
 A redirect alone never proves payment.
@@ -133,9 +195,7 @@ To use a custom API endpoint, set `TAPAYA_BASE_URL=https://api.example.com` on y
 An explicit `baseUrl` takes precedence over `TAPAYA_BASE_URL`; both override environment selection.
 
 The client resolves the API key and API URL once, when it is constructed. Use a key that matches the
-selected environment. API, return, and hosted checkout URLs must use HTTPS, except that HTTP is allowed for
-`localhost`, `127.0.0.1`, and `[::1]` outside `NODE_ENV=production`. The SDK checks the current `NODE_ENV` each
-time it validates a local HTTP URL.
+selected environment. Checkout environments are `sandbox` and `production`. Use HTTPS for API, return, and hosted checkout URLs.
 
 Each method also accepts `signal`, `timeoutMs`, and `maxRetries` for a single request:
 
@@ -169,7 +229,7 @@ const session = await tapaya.checkout.sessions.create(params, {
   merchantToken: order.merchantToken,
   idempotencyKey: order.checkoutAttemptKey,
 })
-const current = await tapaya.checkout.sessions.retrieve(session.id, {
+const current = await tapaya.checkout.sessions.get(session.id, {
   merchantToken: order.merchantToken,
 })
 ```
@@ -185,7 +245,7 @@ organization Secret key.
 `tapaya.checkout.sessions.create(params, options?)` selects hosted checkout when `mode` is omitted or `'hosted'`.
 For `mode: 'embedded'`, see [Embedded checkout](#embedded-checkout). Hosted checkout requires `merchantOrderId`,
 `amount`, and `currency`. `merchantOrderId` is your order reference, 1 to 200 characters. `amount` is the final total,
-including tax and shipping, an integer between 1 and 2,147,483,647 minor units. `currency` is a three-letter ISO 4217
+including tax and shipping, an integer between 0 and 2,147,483,647 minor units. Zero verifies and saves a payment method; it requires `savePaymentMethod: 'required'` and no `shippingOptions`. `currency` is a three-letter ISO 4217
 code. Tapaya stores and returns it uppercase.
 
 Hosted and embedded checkout share one payment engine. A merchant can have at most one successful payment per
@@ -197,9 +257,9 @@ Optional fields:
 
 | Field | Description |
 |---|---|
-| `locale` | Language of the hosted page, such as `en`. Defaults to `en`. |
+| `locale` | Language of the hosted page, such as `en`. Omit to use the browser language. |
 | `successUrl`, `cancelUrl` | Return URLs. Default to the URLs in your Checkout settings. |
-| `tax`, `shipping` | Tax and shipping included in `amount`, in minor units. |
+| `tax`, `shipping` | Tax and shipping included in `amount`, in minor units. Omit tax or shipping, or send `null`, to hide its row. Tax of `0` explicitly reports no VAT; shipping of `0` means free shipping. |
 | `taxRate` | Single tax rate in percentage points, such as `21`. |
 | `taxBreakdown` | Tax per rate, `[{ taxRate, tax }]`, for orders with mixed rates. Use instead of `taxRate`: the types reject both together. |
 | `items` | Products shown on the hosted page: `reference`, `name`, `description`, `imageUrl`, `quantity`, and `unitAmount`. Items are for display only and do not change the amount charged. |
@@ -214,8 +274,8 @@ tax totals, and customer address limits.
 
 ### Get a session
 
-`tapaya.checkout.sessions.retrieve(id, options?)` returns the current state of a hosted session.
-`get` remains an alias for `retrieve`. Pass `{ mode: 'embedded' }` to retrieve an embedded session.
+`tapaya.checkout.sessions.get(id, options?)` returns the current state of a hosted session.
+Pass `{ mode: 'embedded' }` to read an embedded session. `retrieve` is a deprecated alias for `get`.
 
 Hosted creation and retrieval return a `HostedCheckoutSession`. The `CheckoutSession` type is a union
 of hosted and embedded sessions, distinguished by `mode`:
@@ -227,11 +287,11 @@ of hosted and embedded sessions, distinguished by `mode`:
 | `url` | Hosted payment page. Redirect to it unchanged. |
 | `merchantOrderId`, `amount`, `currency` | Order details to compare with your stored order. |
 | `status` | `open`, `completed`, or `expired`. Sessions accept new payments for 30 minutes; a payment already submitted still completes. New values may be added. |
-| `paymentStatus` | `unpaid`, `successful`, `failed`, `cancelled`, or `action_needed`. New values may be added. |
+| `paymentStatus` | `unpaid`, `successful`, `authorized`, `failed`, `cancelled`, or `action_needed`. New values may be added. |
 | `paymentReference` | Token of the latest payment attempt, or `null` before the first attempt. |
-| `tax`, `shipping`, `taxRate`, `taxBreakdown` | Totals sent when the session was created. Default to `0`, `0`, `null`, and `[]`. |
+| `tax`, `shipping`, `taxRate`, `taxBreakdown` | Totals sent when the session was created. Default to `null`, `null`, `null`, and `[]`. Explicit zero tax means no VAT; zero shipping means free shipping. |
 | `items` | Items sent when the session was created, or an empty array. |
-| `createdAt`, `expiresAt`, `completedAt` | ISO 8601 timestamps. `completedAt` is `null` until payment succeeds. |
+| `createdAt`, `expiresAt`, `completedAt` | ISO 8601 timestamps. `completedAt` is `null` until checkout completes with payment or authorization. |
 
 Handle unknown `status` and `paymentStatus` values, for example by treating them as not yet paid. Only
 `paymentStatus: 'successful'` proves payment.
@@ -329,11 +389,11 @@ const order = { merchantOrderId: 'order-1042', amount: 12100, currency: 'EUR' }
 
 // Your POST /api/payments endpoint. The browser SDK calls it on load and on submit.
 const session = await tapaya.checkout.sessions.prepare(order)
-return Response.json({ clientSecret: session.clientSecret, status: session.status })
+return Response.json({ clientSecret: session.clientSecret, status: session.status, paymentStatus: session.paymentStatus })
 
 // Your confirmation page and reconciliation job.
 const current = await tapaya.checkout.sessions.verify(order)
-if (current?.status === 'completed') await fulfillOnce(order)
+if (current?.paymentStatus === 'successful') await fulfillOnce(order)
 ```
 
 `prepare(order)` returns the order's session. It creates the first attempt, reuses an unresolved one,
@@ -347,12 +407,18 @@ every submission. `order` takes `merchantOrderId`, `amount`, uppercase `currency
 first attempt. Both methods throw `TapayaOrderMismatchError` when the session's amount or currency differ
 from `order`, so a changed cart is never paid at the old total.
 
+With `shippingOptions`, the charged total is the `amount` of the option the shopper selects. Always
+pass `prepare` the order exactly as you first created it; the API rejects a changed order with a 409
+`PaymentsApiError`. Pass `verify` the final total from your own records: the `amount` of the option
+matching `shippingQuote.selectedOptionId` among the options you offered or approved. Never copy the
+total from the session you are verifying.
+
 The session's `status` tells you what to do:
 
 | `status` | Meaning |
 |---|---|
 | `open` | The shopper can pay, or a payment is still being processed. Keep the order reserved. |
-| `completed` | Paid. Fulfill the order once. |
+| `completed` | Paid or authorized. Fulfill paid orders only when `paymentStatus` is `successful`; `authorized` is a hold awaiting capture. |
 | `ended` | Cancelled. Release the order; a new checkout needs a new `merchantOrderId`. |
 
 The session also contains `mode: 'embedded'`, `url: null`, `clientSecret`, `retryAllowed`,
@@ -365,7 +431,7 @@ Send `clientSecret` only to the shopper authorized to pay this order. Never log 
 that was never submitted becomes `cancelled` when read. An expired browser credential never cancels a
 pending charge, so keep reconciling pending payments on your server.
 
-This preview has no webhooks. Run a scheduled job that calls `verify(order)` for unpaid orders, so a
+Checkout has no webhooks. Run a scheduled job that calls `verify(order)` for unpaid orders, so a
 shopper closing the tab does not prevent fulfillment. Embedded checkout never retries requests
 automatically. API failures throw `PaymentsApiError`, a `TapayaApiError` subclass, with `status`, `code`,
 `fieldErrors`, `headers`, and `requestId`. Invalid arguments throw `TapayaValidationError`; transport
@@ -380,7 +446,7 @@ decline. Keep diagnostics on your server and show your own shopper-facing text.
   `environment` is `'sandbox'` for test payments and `'production'` for live payments. See
   [Mount the card fields](#mount-the-card-fields).
 - `sessions.create({ mode: 'embedded', ...order }, { idempotencyKey })` creates one attempt with your own key.
-- `sessions.retrieve(id, { mode: 'embedded' })` and `sessions.findByOrder(merchantOrderId)` read a session
+- `sessions.get(id, { mode: 'embedded' })` and `sessions.findByOrder(merchantOrderId)` read a session
   without comparing it to your order. `findByOrder` returns `null` only for a 404 response.
 - `sessions.confirm(id, token)` submits a card token, and `sessions.recover(id)` requests recovery of the
   payment. The browser SDK calls Tapaya directly, so most integrations need neither.
@@ -398,19 +464,178 @@ rejects with the signal's reason and never retries the request.
 
 ```ts
 const controller = new AbortController()
-const current = await tapaya.checkout.sessions.retrieve(session.id, {
+const current = await tapaya.checkout.sessions.get(session.id, {
 	mode: 'embedded',
 	signal: controller.signal,
 	timeoutMs: 10_000,
 })
 ```
 
-The endpoint must use HTTPS. HTTP loopback endpoints are accepted for local
-testing only when `NODE_ENV` is not `production`.
+Use HTTPS for the API endpoint. Test integrations against the sandbox API before switching to production.
 
 `TapayaPayments` remains available as a deprecated compatibility client. Its `prepare`, `retrieve`,
 and other methods keep their existing merchant payment responses. New integrations use `Tapaya` and
 `checkout.sessions`; hosted calls without `mode` continue to work.
+
+## Authorize now and capture later
+
+Set `captureMethod: 'manual'` to reserve funds on a new card without capturing them:
+
+```ts
+const session = await tapaya.checkout.sessions.create({
+  merchantOrderId: 'order-42', amount: 1200, currency: 'EUR', captureMethod: 'manual',
+})
+```
+
+For embedded checkout, also pass `mode: 'embedded'` and a `returnUrl` on an allowed checkout website.
+An `authorized` result means funds are held, not paid. Capture or cancel the payment later with
+`tapaya.payments.capture` or `tapaya.payments.cancel`.
+
+Positive holds do not require card saving. Zero-value authorizations still require
+`savePaymentMethod: 'required'` and `customerReference`. Manual capture supports card entry only,
+without `shippingOptions`. Set `allowIncrementalAuthorization: true` when you need to request
+increases later; an increase can be declined.
+
+## Save a card
+
+Set `customerReference`, `savePaymentMethod`, and `paymentMethodUsage` when creating a hosted or embedded session:
+
+```ts
+const session = await tapaya.checkout.sessions.create({
+  mode: 'embedded', merchantOrderId: 'order-42', amount: 1200, currency: 'EUR',
+  customerReference: 'buyer-42', savePaymentMethod: 'optional', paymentMethodUsage: 'off_session',
+})
+```
+
+`optional` displays an unchecked checkbox with localized wording supplied by Tapaya.js. The card is saved only when selected.
+Override the checkbox label with `labels.saveCardOnSession` when creating the payment component.
+For off-session saving, `labels.saveCardOffSession` supplies a separate disclosure beneath the label.
+`required` displays a disclosure using consent you already collected. Apple Pay and Google Pay save like cards.
+For off-session saving, pass `walletAgreement` (`recurring` or `automatic_reload`, with a `managementUrl` on an allowed checkout
+website) so Apple Pay shows the future charges in its sheet; without it, Apple Pay is not offered for that save. Pass the same
+object to Tapaya.js as `cardSaving.walletAgreement`. Saved wallet methods have `card.wallet` (`type`, `deviceBound`) and can be
+charged merchant-initiated only. List one kind with `paymentMethods.list({ customerReference, wallet: 'apple_pay' })`.
+Omit `paymentMethodUsage` when saving is `none`. Use `on_session` for future shopper-present payments or `off_session` for payments without the shopper.
+
+### Choose how the shopper consents
+
+| You want | Use |
+| --- | --- |
+| Tapaya's checkbox | `savePaymentMethod: 'optional'` |
+| Your own checkbox or subscription terms | Collect consent on your page, then create the payment with `'required'` when accepted or `'none'` otherwise |
+| Saving as part of the service, such as a subscription | `'required'`, with terms the shopper accepts at your checkout button |
+
+`required` never collects consent itself; it records `merchant_asserted` consent that you collected.
+
+Pass `savingTerms` to show your own wording and a link to your terms in hosted and embedded checkout alike:
+
+```ts
+savingTerms: { text: 'Save my card for Pro plan renewals.', url: 'https://shop.example/terms#billing' }
+```
+
+`text` replaces the default checkbox label or disclosure. Tapaya does not translate it: send it in the shopper's language, and
+set `locale` on hosted sessions that use it, so the page matches the text. `url` must be HTTPS on an allowed
+checkout website. For embedded payments created on submission, pass the same object to Tapaya.js as `cardSaving.savingTerms`.
+
+Each saved method returns `consent` with its `type` (`checkbox` or `merchant_asserted`), `acceptedAt`, `wordingVersion`,
+`savingTerms`, and the shopper's `ipAddress` and `userAgent`. Keep it with your billing records as evidence.
+
+Read the session or payment on your server until `paymentMethodId` is non-null. Saving can finish after payment success.
+A failed save does not undo the payment. Never charge again to retry saving.
+
+To verify and save without a purchase, create a new card payment with zero amount and required saving:
+
+```ts
+const setup = await tapaya.payments.create({
+  merchantOrderId: 'setup-buyer-42', amount: 0, currency: 'EUR',
+  customerReference: 'buyer-42', savePaymentMethod: 'required', paymentMethodUsage: 'off_session',
+})
+```
+
+Pass `setup.clientSecret` to the normal embedded card form. Zero-amount verification accepts cards, Apple Pay and Google Pay without shipping. Hosted sessions accept it too.
+
+Saved-card charges require a positive amount. For server confirmation of optional saving,
+pass `{ saveCard: true }` to `tapaya.checkout.sessions.confirm` only after the shopper selects the supplied consent wording.
+
+Manage cards with `tapaya.paymentMethods.list({ customerReference })`, `.get(id)`, `.update(id, fields)`, and `.delete(id)`.
+These methods use `/merchant/saved-payment-methods`. Lists return `{ data, nextCursor }`; pass the cursor to fetch another page.
+Updates accept `expMonth`, `expYear`, `cardholderName`, and `billingAddress`. Omitted and null fields remain unchanged.
+
+## Charge saved cards
+
+Cards saved at checkout (`savePaymentMethod`) are listed with `tapaya.paymentMethods.list({ customerReference })`
+and charged with `tapaya.payments`. Gateway key mode selects test or live payments.
+`handleNextAction` requires this package's 0.4.0 loader, which loads Tapaya.js 0.3.0.
+
+Without the shopper, for example a renewal or a top-up, Tapaya charges the card before `create` resolves:
+
+```ts
+const renewal = await tapaya.payments.create({
+  merchantOrderId: 'sub-42-2026-11',
+  amount: 990,
+  currency: 'EUR',
+  paymentMethodId: 'pm_7Hq2x9LmR4',
+  initiator: 'merchant',
+  merchantInitiatedReason: 'recurring',
+}, { idempotencyKey: 'sub-42-2026-11' })
+// renewal.status: 'successful' | 'declined' (see declineReason) | 'pending'
+```
+
+With the shopper present, for example a one-click purchase, the bank may want to verify the payment. Complete it in
+your page in three steps:
+
+```ts
+// 1. Server: create the payment. It is action_required until the shopper verifies the card.
+const payment = await tapaya.payments.create({
+  merchantOrderId: 'order-1002',
+  amount: 2500,
+  currency: 'EUR',
+  paymentMethodId: 'pm_7Hq2x9LmR4',
+  initiator: 'customer',
+  returnUrl: 'https://shop.example/checkout/return', // for the hosted fallback page
+}, { idempotencyKey: 'order-1002:charge' })
+return { paymentId: payment.id, clientSecret: payment.clientSecret }
+```
+
+```ts
+// 2. Browser: verify the saved card with 3-D Secure in your page.
+import { loadTapaya } from '@tapayadot/checkout/client'
+
+const tapaya = await loadTapaya(publishableKey, { apiOrigin })
+const result = await tapaya.handleNextAction({ clientSecret })
+if (result.status === 'action_required') showError(result.error?.message) // closed or failed: call again to retry
+else if (result.status === 'declined') showDecline(result.declineReason)
+```
+
+```ts
+// 3. Server: verify before fulfilling. The browser result is only a hint.
+const verified = await tapaya.payments.get(paymentId)
+if (verified.status === 'successful') fulfill(verified.merchantOrderId)
+```
+
+Verification opens a modal over your page, including during frictionless approvals. You can cancel it without leaving the page. `handleNextAction`
+resolves with `status` `successful`, `authorized` (manual capture), `declined`, `action_required` (nothing charged,
+retry), `pending` (read the payment on your server) or `cancelled` (expired). It rejects with `PaymentError` only
+when it cannot work on the payment, for example an invalid client secret or a network failure; with
+`error.submitted`, read the payment before offering another attempt.
+
+`payment.nextAction` is `{ type: 'three_d_secure', url, expiresAt }`. Where Tapaya.js cannot run, for example in an
+email, redirect the shopper to `nextAction.url` instead: a Tapaya page completes the same action and returns the
+shopper to `returnUrl?paymentId=…`. Whichever completes first charges the card once. Unfinished payments are cancelled
+at `expiresAt`, after 15 minutes.
+
+Manual capture and refunds use the same resource. Every write takes an `idempotencyKey`; store it with the order so
+retries replay instead of charging twice.
+
+```ts
+const hold = await tapaya.payments.create({
+  merchantOrderId: 'stay-310', amount: 20000, currency: 'EUR', paymentMethodId: 'pm_7Hq2x9LmR4',
+  initiator: 'merchant', merchantInitiatedReason: 'unscheduled', captureMethod: 'manual', allowIncrementalAuthorization: true,
+}, { idempotencyKey: 'stay-310' })
+await tapaya.payments.increment(hold.id, { amount: 5000 }, { idempotencyKey: 'stay-310:extra-night' })
+await tapaya.payments.capture(hold.id, { amount: 18000 }, { idempotencyKey: 'stay-310:checkout' }) // or cancel(hold.id, …)
+await tapaya.payments.refunds.create(hold.id, { amount: 500 }, { idempotencyKey: 'stay-310:refund-1' })
+```
 
 ## Browser card fields
 
@@ -426,7 +651,7 @@ Your prepare endpoint returns a `PreparedPayment`, exported by both entry points
 import type { PreparedPayment } from '@tapayadot/checkout'
 
 const session = await tapaya.checkout.sessions.prepare(order)
-return Response.json({ clientSecret: session.clientSecret, status: session.status } satisfies PreparedPayment)
+return Response.json({ clientSecret: session.clientSecret, status: session.status, paymentStatus: session.paymentStatus } satisfies PreparedPayment)
 ```
 
 ### Mount the card fields
@@ -484,11 +709,9 @@ You can also pass a known `clientSecret` to `createPayment()` instead of
 endpoint for one submission. A pending payment always checks its current status
 instead of charging again.
 
-`loadTapaya` loads Tapaya.js from `https://js.tapaya.com/checkout/0.2.0/checkout.js`.
-Script updates use the same path and are cached for five minutes.
+`loadTapaya` loads Tapaya.js from `https://js.tapaya.com/checkout/0.3.0/checkout.js`.
+Released script versions stay unchanged. Updated scripts use a new versioned path.
 Server-only releases of this package do not change the script version.
-For local testing, pass the origin
-that serves Tapaya.js: `loadTapaya(publishableKey, { apiOrigin, origin: 'http://localhost:4191' })`.
 
 Call `payment.destroy()` on teardown. It removes the frame. It cannot cancel a
 submitted payment or an issuer challenge.
@@ -499,7 +722,7 @@ call `loadTapaya` again to retry, or use `retryMount()` with the React hook.
 #### Without a bundler
 
 ```html
-<script src="https://js.tapaya.com/checkout/0.2.0/checkout.js"></script>
+<script src="https://js.tapaya.com/checkout/0.3.0/checkout.js"></script>
 <script>
   const tapaya = Tapaya('pk_test_…', { apiOrigin: 'https://api.sandbox.tapaya.com' })
   const payment = tapaya.createPayment({ prepare: '/api/payments' })
@@ -507,9 +730,8 @@ call `loadTapaya` again to retry, or use `retryMount()` with the React hook.
 </script>
 ```
 
-To pin an exact release, use `/checkout/0.2.0/checkout.js` and the SHA-384 hashes
-in that version's `manifest.json` for `integrity` attributes. Channel URLs change
-with each compatible fix, so they cannot carry a fixed hash.
+To pin an exact release, use `/checkout/0.3.0/checkout.js` and the SHA-384 hashes
+in that version's `manifest.json` for `integrity` attributes. There are no release channel aliases.
 
 #### React
 
@@ -566,9 +788,34 @@ pending, awaiting action, or successful.
   `pending` with error code `access_ended`. The SDK keeps asking your endpoint
   until your server reports `completed` or `ended`.
 
+<a id="payment-errors"></a>
+
 Errors are `PaymentError`s with a `code`, a shopper-safe `message`, and
 `submitted`, which is true when a charge may have been sent. Check `error.code`
-rather than `instanceof`, because the hosted script has its own class.
+to decide how to handle the failure. The package loader normalizes hosted script errors
+so `instanceof PaymentError` also works. Show
+`message` to the shopper and branch on `code`; `snapshot.error` carries the same
+values. The `PaymentErrorCode` type lists the stable codes. Keep a default
+branch, because new codes may be added.
+
+None of these codes submits a charge:
+
+| Code | Meaning |
+| --- | --- |
+| `cardholder_required`, `card_invalid` | Fix the card form. The message says what to change. |
+| `customer_details_invalid` | A required contact or billing field is missing or invalid, including one a wallet did not return. |
+| `shipping_address_incomplete`, `shipping_option_required` | Delivery needs an address or option. |
+| `shipping_unavailable` | No delivery option serves the address. |
+| `shipping_changed`, `shipping_total_changed` | Delivery or its total changed. The shopper reviews it and pays again. |
+| `shipping_quote_failed` | Delivery could not be priced or approved, including a store handler failure or timeout. |
+| `currency_mismatch` | `wallets.currency` differs from the payment's currency. |
+| `amount_mismatch` | `wallets.amount` differs from the payment's amount, without shipping quotes. |
+| `wallet_unavailable`, `wallet_session_ended`, `wallet_authorization_failed` | The wallet could not open or authorize. |
+
+`currency_mismatch` and `amount_mismatch` are integration errors: pass the
+payment's currency and total to `wallets`. Their `details` hold `expected` (the
+payment's value) and `actual` (the wallet's value) for debugging, for example
+`{ expected: 'EUR', actual: 'CZK' }`. The shopper sees the generic error label.
 
 Frame requests time out after 90 seconds without a reply or progress. Issuer
 authentication gets up to 10 minutes. A timeout removes the old frame so it
@@ -627,6 +874,53 @@ Tapaya refuses to confirm if the reserved payment differs from the wallet total.
 
 `snapshot.paymentMethod` identifies the selected method. Show your card submit
 button only for `card`; wallets require their own branded button.
+
+`appearance.walletButtonType` selects the official button text, so the button
+says what happens next:
+
+| Value | Apple Pay | Google Pay |
+| --- | --- | --- |
+| `'plain'` (default) | Logo only | Logo only |
+| `'buy'` | Buy with Apple Pay | Buy with Google Pay |
+| `'pay'` | Logo only | Pay with Google Pay |
+| `'checkout'` | Check out with Apple Pay | Checkout with Google Pay |
+| `'order'` | Order with Apple Pay | Order with Google Pay |
+| `'book'` | Book with Apple Pay | Book with Google Pay |
+| `'donate'` | Donate with Apple Pay | Donate with Google Pay |
+| `'subscribe'` | Subscribe with Apple Pay | Subscribe with Google Pay |
+
+```ts
+const payment = tapaya.createPayment({
+  prepare: '/api/checkout/payment',
+  wallets: { amount: 2450, currency: 'EUR' },
+  appearance: { walletButtonType: 'buy' },
+})
+```
+
+The text follows the frame's `locale`; Google Pay uses Czech, Slovak or English. Apple and Google brand
+guidelines do not allow custom text such as the amount on their buttons, so show
+the total next to the button on your page. Apple Pay on the Web has no "Pay with"
+button, so `'pay'` shows the Apple Pay logo only. Safari versions that predate
+`order` show the logo only as well.
+
+`appearance.walletButtonColor` and `appearance.walletButtonRadius` fit the buttons to
+your page within Apple's and Google's brand guidelines:
+
+| Option | Values | Default |
+| --- | --- | --- |
+| `walletButtonColor` | `'black'` for light backgrounds, `'white'` for dark ones, `'white-outline'` for white backgrounds | `'black'` |
+| `walletButtonRadius` | Corner radius in pixels, from `0` (square) to `24` (pill) | `8` |
+
+Google Pay has no outlined button and draws `'white'` for `'white-outline'`. Match the
+radius to your other buttons. The wallets do not accept custom colors, so brand colors
+from `appearance.variables` never reach the buttons.
+
+```ts
+appearance: { walletButtonType: 'buy', walletButtonColor: 'white', walletButtonRadius: 24 }
+```
+
+Like `cardBrandIcon`, the type, color and radius apply when the fields mount; the
+React hook remounts the fields when they change.
 
 Wallet results use the same `snapshot`, recovery, and confirmation-page flow as cards.
 Closing a wallet sheet does not charge the payment. Keep the checkout available.

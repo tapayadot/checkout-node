@@ -11,6 +11,49 @@ const result = {
   clientSecret: `${"a".repeat(32)}_secret_v1_${"b".repeat(43)}`,
 };
 describe("server payment client", () => {
+  it.each([0, 1200])('sends a manual preauthorization for %i and accepts the authorized result', async (amount) => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ ...result, merchantOrderId: 'hold', amount, status: 'authorized' }));
+    const client = new TapayaPayments('merchant-secret', { fetch: fetcher });
+    const input = { merchantOrderId: 'hold', amount, currency: 'EUR',
+      ...(amount === 0 ? { customerReference: 'buyer', savePaymentMethod: 'required' as const, paymentMethodUsage: 'off_session' as const } : {}),
+      captureMethod: 'manual' as const, allowIncrementalAuthorization: true, returnUrl: 'https://example.com/return' };
+    expect((await client.prepare(input, 'hold')).status).toBe('authorized');
+    expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toMatchObject(input);
+  });
+
+  it.each([
+    { captureMethod: 'manual', amount: 0 },
+    { captureMethod: 'manual', amount: 50 },
+    { captureMethod: 'automatic', amount: 0, allowIncrementalAuthorization: true },
+    { captureMethod: 'manual', amount: 0, returnUrl: 'http://shop.example/return' },
+  ] as const)('rejects invalid embedded authorization options %j', async options => {
+    const fetcher = vi.fn();
+    const client = new TapayaPayments('merchant-secret', { fetch: fetcher });
+    await expect(client.prepare({ merchantOrderId: 'zero-hold', currency: 'EUR', customerReference: 'buyer',
+      savePaymentMethod: 'required', paymentMethodUsage: 'off_session', ...options }, 'zero-hold'))
+      .rejects.toBeInstanceOf(TapayaValidationError);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("sends collection policy and preserves customer details on every payment read", async () => {
+    const customer = { email: "buyer@example.com", name: "Buyer", phone: "+420123456789", billingAddress: { city: "Prague", country: "CZ" }, shippingAddress: null };
+    const fetcher = vi.fn().mockImplementation(async () => Response.json({ ...result, customer }));
+    const client = new TapayaPayments("merchant-secret", { fetch: fetcher });
+    const customerCollection = { email: "required" as const, name: "optional" as const, billingAddress: "optional" as const };
+    expect((await client.prepare({ merchantOrderId: "order-1", amount: 1200, currency: "EUR", customerCollection, customer }, "collection-key")).customer).toEqual(customer);
+    expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toMatchObject({ customerCollection, customer });
+    expect((await client.retrieve(result.id)).customer).toEqual(customer);
+    expect((await client.findByOrder(result.merchantOrderId))?.customer).toEqual(customer);
+    expect((await client.recover(result.id)).customer).toEqual(customer);
+  });
+
+  it("rejects an invalid collection mode before sending a request", async () => {
+    const fetcher = vi.fn();
+    const client = new TapayaPayments("merchant-secret", { fetch: fetcher });
+    await expect(client.prepare({ merchantOrderId: "order-1", amount: 1200, currency: "EUR", customerCollection: { email: "invalid" as never } }, "collection-key"))
+      .rejects.toBeInstanceOf(TapayaValidationError);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("preserves API diagnostics for embedded requests", async () => {
     const client = new TapayaPayments("merchant-secret", {
       fetch: vi.fn(async () => Response.json({

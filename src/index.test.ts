@@ -247,6 +247,30 @@ describe('client configuration', () => {
 })
 
 describe('checkout.sessions.create', () => {
+  it.each([0, 1200])('creates a hosted authorization for %i and preserves its completion status', async (amount) => {
+    const body = { ...created, amount, status: 'completed', paymentStatus: 'authorized' }
+    const fetchImpl = vi.fn().mockImplementation(() => response(200, body))
+    const sessions = client(fetchImpl)
+    const input = { merchantOrderId: 'hold-1', amount, currency: 'EUR',
+      ...(amount === 0 ? { customerReference: 'buyer-42', savePaymentMethod: 'required' as const } : {}),
+      captureMethod: 'manual' as const, allowIncrementalAuthorization: true }
+    await expect(sessions.create(input)).resolves.toMatchObject({ status: 'completed', paymentStatus: 'authorized' })
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject(input)
+    await expect(sessions.get(created.id)).resolves.toMatchObject({ paymentStatus: 'authorized' })
+    await expect(sessions.create({ ...input, captureMethod: 'automatic' })).rejects.toBeInstanceOf(TapayaValidationError)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('sends hosted collection policy and preserves the returned customer snapshot', async () => {
+    const customer = { email: 'buyer@example.com', name: 'Buyer', phone: '+420123456789', billingAddress: null, shippingAddress: null }
+    const customerCollection = { email: 'required' as const, name: 'optional' as const }
+    const fetchImpl = vi.fn().mockImplementation(async () => response(200, { ...created, customer }))
+    const sessions = client(fetchImpl)
+    expect((await sessions.create({ ...params, customerCollection, customer })).customer).toEqual(customer)
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject({ customerCollection, customer })
+    expect((await sessions.get(created.id)).customer).toEqual(customer)
+  })
+
   it('sends only supported fields and returns the full session shape', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
     await expect(client(fetchImpl).create({ ...params, lineItems: [] } as unknown as CreateCheckoutSessionParams))
@@ -278,6 +302,17 @@ describe('checkout.sessions.create', () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
     await client(fetchImpl).create(nullableParams)
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual(nullableParams)
+  })
+
+  it('allows a zero amount only for required saving without shipping', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
+    const verification = { merchantOrderId: 'setup-1', amount: 0, currency: 'EUR', customerReference: 'buyer-42', savePaymentMethod: 'required' as const }
+    await client(fetchImpl).create(verification)
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject({ amount: 0, savePaymentMethod: 'required' })
+    await expect(client(fetchImpl).create({ ...verification, savePaymentMethod: 'optional' })).rejects.toBeInstanceOf(TapayaValidationError)
+    await expect(client(fetchImpl).create({ ...verification, shippingOptions: { options: [{ id: 'x', label: 'X', price: 1, amount: 1, countries: ['CZ'] }] } }))
+      .rejects.toBeInstanceOf(TapayaValidationError)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
   it('omits optional fields when absent', async () => {
@@ -367,7 +402,21 @@ describe('checkout.sessions.create', () => {
 
   it('defaults omitted response totals and items', async () => {
     const { tax, shipping, taxBreakdown, ...legacy } = created
-    await expect(client(vi.fn().mockResolvedValue(response(200, legacy))).create(params)).resolves.toEqual(session)
+    await expect(client(vi.fn().mockResolvedValue(response(200, legacy))).create(params)).resolves.toEqual({ ...session, tax: null, shipping: null })
+  })
+
+  it.each([null, 0, 20])('preserves response tax on create and get (%j)', async (tax) => {
+    const body = { ...created, tax }
+    const sessions = client(vi.fn().mockImplementation(() => Promise.resolve(response(200, body))))
+    await expect(sessions.create(params)).resolves.toMatchObject({ tax })
+    await expect(sessions.get(created.id)).resolves.toMatchObject({ tax })
+  })
+
+  it.each([null, 0, 605])('preserves response shipping on create and get (%j)', async (shipping) => {
+    const body = { ...created, shipping }
+    const sessions = client(vi.fn().mockImplementation(() => Promise.resolve(response(200, body))))
+    await expect(sessions.create(params)).resolves.toMatchObject({ shipping })
+    await expect(sessions.get(created.id)).resolves.toMatchObject({ shipping })
   })
 
   it('generates a UUID idempotency key per call', async () => {
