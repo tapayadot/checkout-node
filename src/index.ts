@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
 import type { SavingTerms, WalletAgreement } from './client/types.js'
 
-export const VERSION = '0.4.0'
+export const VERSION = '0.5.0'
 
 const USER_AGENT = `tapaya-checkout-js/${VERSION}`
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -29,12 +29,18 @@ export type CheckoutItem = {
   name: string
   /** Product description. May be empty. */
   description: string
-  /** Absolute URL of the product image. */
-  imageUrl: string
+  /** Absolute URL of the product image. Omit or send null when the item has no image. */
+  imageUrl?: string | null
   /** Number of units, a positive integer. */
   quantity: number
   /** Price of one unit, in minor units. */
   unitAmount: number
+}
+
+/** An item as returned on a session. */
+export type CheckoutSessionItem = Omit<CheckoutItem, 'imageUrl'> & {
+  /** Absolute URL of the product image, or `null` when the item has no image. */
+  imageUrl: string | null
 }
 
 export type TaxBreakdownEntry = {
@@ -270,7 +276,7 @@ export type HostedCheckoutSession = {
   /** Tax per rate. Empty when not sent. */
   taxBreakdown: TaxBreakdownEntry[]
   /** Items sent when the session was created. Empty when none were sent. */
-  items: CheckoutItem[]
+  items: CheckoutSessionItem[]
   /** Token of the latest payment attempt, or `null` before the first attempt. */
   paymentReference: string | null
   /** ISO 8601 timestamp of when the session was created. */
@@ -404,7 +410,7 @@ const createSessionSchema = z.object({
     reference: z.string(),
     name: z.string(),
     description: z.string(),
-    imageUrl: z.string(),
+    imageUrl: z.string().nullish(),
     quantity: z.number().int().positive().max(MAX_INT32),
     unitAmount: minorAmountSchema,
   })).nullish(),
@@ -449,7 +455,7 @@ const sessionSchema = z.object({
     reference: z.string(),
     name: z.string(),
     description: z.string(),
-    imageUrl: z.string(),
+    imageUrl: z.string().nullable().default(null),
     quantity: z.number(),
     unitAmount: z.number(),
   })).default([]),

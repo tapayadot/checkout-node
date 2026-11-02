@@ -332,7 +332,7 @@ describe('checkout.sessions.create', () => {
     [{ customer: { email: `${'a'.repeat(243)}@example.com` } }, 'customer.email'],
     [{ customer: { billingAddress: { country: 203 } } }, 'customer.billingAddress.country'],
     [{ items: [{ ...item, name: undefined }] }, 'items.0.name'],
-    [{ items: [{ ...item, imageUrl: null }] }, 'items.0.imageUrl'],
+    [{ items: [{ ...item, imageUrl: 42 }] }, 'items.0.imageUrl'],
     [{ items: [{ ...item, quantity: 0 }] }, 'items.0.quantity'],
     [{ items: [{ ...item, quantity: 1.5 }] }, 'items.0.quantity'],
     [{ items: [{ ...item, unitAmount: -1 }] }, 'items.0.unitAmount'],
@@ -398,6 +398,16 @@ describe('checkout.sessions.create', () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, { ...created, items }))
     await expect(client(fetchImpl).create({ ...params, items })).resolves.toEqual({ ...session, items })
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body).items).toEqual(items)
+  })
+
+  it.each([
+    ['omitted', (({ imageUrl, ...rest }) => rest)(item)],
+    ['null', { ...item, imageUrl: null }],
+  ])('sends an item without an image (%s) and returns imageUrl as null', async (_, input) => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(200, { ...created, items: [input] }))
+    await expect(client(fetchImpl).create({ ...params, items: [input] }))
+      .resolves.toEqual({ ...session, items: [{ ...item, imageUrl: null }] })
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).items).toEqual([input])
   })
 
   it('defaults omitted response totals and items', async () => {

@@ -2,7 +2,7 @@
 
 ![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-green) ![TypeScript](https://img.shields.io/badge/TypeScript-supported-blue) [![npm](https://img.shields.io/npm/v/%40tapayadot%2Fcheckout)](https://www.npmjs.com/package/@tapayadot/checkout) [![Docs](https://img.shields.io/badge/docs-tapaya.com-blue)](https://docs.tapaya.com/online) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.4.0.
+TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.5.0.
 Create a Checkout session for an order, redirect the customer to the Tapaya-hosted payment page, and verify the
 payment on your server before fulfilling the order. For embedded card fields, the same package provides the browser
 SDK (`@tapayadot/checkout/client`) and a React hook (`@tapayadot/checkout/react`).
@@ -262,7 +262,7 @@ Optional fields:
 | `tax`, `shipping` | Tax and shipping included in `amount`, in minor units. Omit tax or shipping, or send `null`, to hide its row. Tax of `0` explicitly reports no VAT; shipping of `0` means free shipping. |
 | `taxRate` | Single tax rate in percentage points, such as `21`. |
 | `taxBreakdown` | Tax per rate, `[{ taxRate, tax }]`, for orders with mixed rates. Use instead of `taxRate`: the types reject both together. |
-| `items` | Products shown on the hosted page: `reference`, `name`, `description`, `imageUrl`, `quantity`, and `unitAmount`. Items are for display only and do not change the amount charged. |
+| `items` | Products shown on the hosted page: `reference`, `name`, `description`, `quantity`, `unitAmount`, and an optional `imageUrl`. Items are for display only and do not change the amount charged. Sessions return `imageUrl: null` for items without an image. |
 | `customer` | Optional `email`, `billingAddress`, and `shippingAddress`. Send only the details you collect. |
 
 Before sending, the SDK checks types, required fields, integer amounts, the currency format, and a maximum email
