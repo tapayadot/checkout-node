@@ -2,7 +2,7 @@
 
 ![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-green) ![TypeScript](https://img.shields.io/badge/TypeScript-supported-blue) [![npm](https://img.shields.io/npm/v/%40tapayadot%2Fcheckout)](https://www.npmjs.com/package/@tapayadot/checkout) [![Docs](https://img.shields.io/badge/docs-tapaya.com-blue)](https://docs.tapaya.com/online) [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.4.0.
+TypeScript SDK for [Tapaya Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout) and embedded card payments. This README describes version 0.5.0.
 Create a Checkout session for an order, redirect the customer to the Tapaya-hosted payment page, and verify the
 payment on your server before fulfilling the order. For embedded card fields, the same package provides the browser
 SDK (`@tapayadot/checkout/client`) and a React hook (`@tapayadot/checkout/react`).
@@ -135,7 +135,8 @@ shipping additionally requires a server-only `callbackUrl` and `callbackSecret`.
 `verifyShippingQuoteSignature()` verifies the callback's exact raw body before
 you parse it. Never expose the callback secret to browser code.
 
-Read the selected option through `shippingQuote`. For embedded dynamic pricing,
+Read the selected option through `shippingQuote`. [Customer Details & Shipping](https://docs.tapaya.com/online/integration/customer_and_shipping)
+covers how these options appear in the card form, Apple Pay, and Google Pay. For embedded dynamic pricing,
 your backend approves a pending revision with
 `checkout.sessions.approveShippingQuote(paymentId, approval)`. The browser's
 `onShippingAddressChange` and `onShippingOptionChange` handlers resolve after that
@@ -262,7 +263,7 @@ Optional fields:
 | `tax`, `shipping` | Tax and shipping included in `amount`, in minor units. Omit tax or shipping, or send `null`, to hide its row. Tax of `0` explicitly reports no VAT; shipping of `0` means free shipping. |
 | `taxRate` | Single tax rate in percentage points, such as `21`. |
 | `taxBreakdown` | Tax per rate, `[{ taxRate, tax }]`, for orders with mixed rates. Use instead of `taxRate`: the types reject both together. |
-| `items` | Products shown on the hosted page: `reference`, `name`, `description`, `imageUrl`, `quantity`, and `unitAmount`. Items are for display only and do not change the amount charged. |
+| `items` | Products shown on the hosted page: `reference`, `name`, `description`, `quantity`, `unitAmount`, and an optional `imageUrl`. Items are for display only and do not change the amount charged. Sessions return `imageUrl: null` for items without an image. |
 | `customer` | Optional `email`, `billingAddress`, and `shippingAddress`. Send only the details you collect. |
 
 Before sending, the SDK checks types, required fields, integer amounts, the currency format, and a maximum email
@@ -373,7 +374,8 @@ try {
 
 ## Embedded checkout
 
-Embedded checkout requires version 0.2.0 or newer.
+Embedded checkout requires version 0.2.0 or newer. For the whole flow, from configuring your server to
+fulfilling the order, see [Embedded Checkout](https://docs.tapaya.com/online/integration/embedded_checkout).
 
 Both checkout experiences use `Tapaya.checkout.sessions`. Embedded checkout uses the
 [browser card fields](#browser-card-fields) from this package. Your server needs two calls: `prepare` before the shopper pays, and `verify`
@@ -494,9 +496,12 @@ An `authorized` result means funds are held, not paid. Capture or cancel the pay
 Positive holds do not require card saving. Zero-value authorizations still require
 `savePaymentMethod: 'required'` and `customerReference`. Manual capture supports card entry only,
 without `shippingOptions`. Set `allowIncrementalAuthorization: true` when you need to request
-increases later; an increase can be declined.
+increases later; an increase can be declined. See [Hold, capture, and refund](https://docs.tapaya.com/online/integration/saved_payment_methods#hold-capture-and-refund).
 
 ## Save a card
+
+[Save Cards & Charge Later](https://docs.tapaya.com/online/integration/saved_payment_methods) explains when to save for merchant-initiated charges and
+when for faster repeat checkout, and how to collect consent.
 
 Set `customerReference`, `savePaymentMethod`, and `paymentMethodUsage` when creating a hosted or embedded session:
 
@@ -564,7 +569,9 @@ Updates accept `expMonth`, `expYear`, `cardholderName`, and `billingAddress`. Om
 ## Charge saved cards
 
 Cards saved at checkout (`savePaymentMethod`) are listed with `tapaya.paymentMethods.list({ customerReference })`
-and charged with `tapaya.payments`. Gateway key mode selects test or live payments.
+and charged with `tapaya.payments`. Gateway key mode selects test or live payments. See
+[Charge the saved card](https://docs.tapaya.com/online/integration/saved_payment_methods#charge-the-saved-card) and
+[When a charge is declined](https://docs.tapaya.com/online/integration/saved_payment_methods#when-a-charge-is-declined).
 `handleNextAction` requires this package's 0.4.0 loader, which loads Tapaya.js 0.3.0.
 
 Without the shopper, for example a renewal or a top-up, Tapaya charges the card before `create` resolves:
@@ -998,6 +1005,12 @@ Full documentation is available at [docs.tapaya.com](https://docs.tapaya.com).
   customer, and verify payment
 - [API Integration](https://docs.tapaya.com/online/integration/api_integration): request fields, payment states, and
   idempotency rules
+- [Embedded Checkout](https://docs.tapaya.com/online/integration/embedded_checkout): card fields on your page, Apple Pay, and Google Pay
+- [Save Cards & Charge Later](https://docs.tapaya.com/online/integration/saved_payment_methods): saving cards and wallets with consent, charging them
+  later, holds, and refunds
+- [Customer Details & Shipping](https://docs.tapaya.com/online/integration/customer_and_shipping): contact details, delivery options, and approved totals
+- [Node.js SDK](https://docs.tapaya.com/online/integration/node_sdk): every operation in this package
+- [Testing](https://docs.tapaya.com/online/getting-started/testing): sandbox setup and test cards
 - [Checkout Security](https://docs.tapaya.com/online/security/checkout_security): key handling and payment
   verification
 
