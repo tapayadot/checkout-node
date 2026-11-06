@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
 import type { SavingTerms, WalletAgreement } from './client/types.js'
 
-export const VERSION = '0.5.0'
+export const VERSION = '0.6.0'
 
 const USER_AGENT = `tapaya-checkout-js/${VERSION}`
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -178,6 +178,9 @@ export type CardSavingOptions = {
   savingTerms?: SavingTerms | null
 }
 
+/** Merchant-supplied contact required when creating a hosted checkout session. */
+export type HostedCheckoutCustomer = CheckoutCustomer & ({ email: string } | { phone: string })
+
 type CheckoutSessionFields = CardSavingOptions & {
   /** Manual authorizes a card without capturing funds. Not supported with shippingOptions. */
   captureMethod?: 'automatic' | 'manual'
@@ -204,8 +207,8 @@ type CheckoutSessionFields = CardSavingOptions & {
   tax?: number | null
   /** Shipping included in `amount`, in minor units. Omit or send null to hide it; zero means free shipping. */
   shipping?: number | null
-  /** Customer details to prefill on the hosted page. */
-  customer?: CheckoutCustomer | null
+  /** Supply an email or phone at creation. Hosted checkout does not render contact inputs. */
+  customer: HostedCheckoutCustomer
   /** Null or omission uses merchant defaults; an empty object disables collection. */
   customerCollection?: CustomerCollection | null
   /** Opt in to server-approved shipping quotes. Omission keeps the fixed creation total. */
@@ -330,6 +333,10 @@ const customerInputSchema = customerSchema.extend({
   name: z.string().max(200).nullish(),
   phone: z.string().max(30).nullish(),
 })
+const hostedCustomerSchema = customerInputSchema.and(z.union([
+  z.object({ email: z.string().refine(value => Boolean(value.trim()), 'Customer email or phone number is required.') }),
+  z.object({ phone: z.string().refine(value => Boolean(value.trim()), 'Customer email or phone number is required.') }),
+], { error: 'Customer email or phone number is required.' }))
 const collectionModeSchema = z.enum(['none', 'optional', 'required'])
 const customerCollectionSchema = z.object({
   email: collectionModeSchema.optional(),
@@ -418,7 +425,7 @@ const createSessionSchema = z.object({
   shipping: minorAmountSchema.nullish(),
   taxRate: z.number().nonnegative().nullish(),
   taxBreakdown: taxBreakdownSchema.nullish(),
-  customer: customerInputSchema.nullish(),
+  customer: hostedCustomerSchema,
   customerCollection: customerCollectionSchema.nullish(),
   shippingOptions: shippingOptionsSchema.nullish(),
 }).superRefine((value, context) => {
