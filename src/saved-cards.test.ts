@@ -12,7 +12,7 @@ function client(body: unknown) {
   const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(body))
   return { api: new Tapaya('secret', { baseUrl: 'https://api.sandbox.tapaya.com', merchantToken: 'merchant-a', fetch: fetcher, maxRetries: 0 }), fetcher }
 }
-const input = { merchantOrderId: 'order-1', amount: 1200, currency: 'EUR' }
+const input = { merchantOrderId: 'order-1', amount: 1200, currency: 'EUR', customer: { email: 'buyer@example.com' } }
 
 describe('card saving', () => {
   it.each(['hosted', 'embedded'] as const)('forwards saving instructions for %s checkout and preserves the returned ID', async mode => {

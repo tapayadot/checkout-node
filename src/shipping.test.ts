@@ -43,7 +43,7 @@ it('preserves hosted dynamic callback configuration at creation and quotes on st
   const fetcher = vi.fn().mockImplementation(async () => Response.json(hosted))
   const client = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
   const shippingOptions = { dynamic: true, callbackUrl: 'https://shop.example/shipping', callbackSecret: 'x'.repeat(32) }
-  expect((await client.create({ merchantOrderId: 'order-1', amount: 1200, currency: 'EUR', shippingOptions })).shippingQuote).toEqual(quote)
+  expect((await client.create({ merchantOrderId: 'order-1', amount: 1200, currency: 'EUR', customer: { email: 'buyer@example.com' }, shippingOptions })).shippingQuote).toEqual(quote)
   expect(JSON.parse(fetcher.mock.calls[0][1].body).shippingOptions).toEqual(shippingOptions)
   expect((await client.get('cs_test')).shippingQuote).toEqual(quote)
 })

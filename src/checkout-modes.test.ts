@@ -5,7 +5,7 @@ import type {
   EmbeddedCheckoutSession, HostedCheckoutSession, RetrieveEmbeddedSessionOptions, TapayaEnvironment,
 } from './index.js'
 
-const order = { merchantOrderId: 'order-1', amount: 1200, currency: 'EUR' }
+const order = { merchantOrderId: 'order-1', amount: 1200, currency: 'EUR', customer: { email: 'buyer@example.com' } }
 const payment = {
   ...order,
   id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -30,6 +30,14 @@ afterEach(() => {
 })
 
 describe('checkout modes', () => {
+  it('keeps embedded preparation available without a contact at creation', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json(payment))
+    const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
+    const { customer: _customer, ...withoutContact } = order
+    await sessions.create({ ...withoutContact, mode: 'embedded' })
+    expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).not.toHaveProperty('customer')
+  })
+
   it.each([0, 1200])('completes an embedded session when its payment for %i is authorized', async (amount) => {
     const fetcher = vi.fn().mockResolvedValue(Response.json({ ...payment, amount, status: 'authorized' }));
     const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions;

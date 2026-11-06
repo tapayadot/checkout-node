@@ -41,6 +41,7 @@ function client(fetchImpl: unknown, options: TapayaOptions = {}) {
 
 const params = {
   merchantOrderId: 'ORDER-1', amount: 120, currency: 'EUR', locale: 'en', tax: 20,
+  customer: { email: 'buyer@example.com' },
   successUrl: 'https://shop.test/success', cancelUrl: 'https://shop.test/cancel',
 } satisfies CreateCheckoutSessionParams
 const item = {
@@ -247,11 +248,33 @@ describe('client configuration', () => {
 })
 
 describe('checkout.sessions.create', () => {
+  it.each([undefined, 'hosted'] as const)('rejects missing contacts before sending for mode %s, regardless of collection policy', async mode => {
+    const fetchImpl = vi.fn()
+    const sessions = client(fetchImpl)
+    for (const customer of [undefined, null, {}, { name: 'Buyer' }, { email: null, phone: null },
+      { email: ' ', phone: '\t' }, { email: '' }, { phone: '' }, { billingAddress: { phone: '+420601123456' } }]) {
+      const input = { ...params, mode, customer, customerCollection: { email: 'required', phone: 'optional' } }
+      const error = await sessions.create(input as unknown as CreateCheckoutSessionParams).catch((error: unknown) => error)
+      expect(error).toBeInstanceOf(TapayaValidationError)
+      expect((error as TapayaValidationError).fieldErrors.some(entry => entry.field === 'customer' || entry.field.startsWith('customer.'))).toBe(true)
+    }
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('requires an email or phone in hosted creation types', () => {
+    const email: CreateCheckoutSessionParams = { ...params, customer: { email: 'buyer@example.com' } }
+    const phone: CreateCheckoutSessionParams = { ...params, customer: { phone: '+420601123456' } }
+    // @ts-expect-error A hosted customer must supply an email or phone.
+    const missing: CreateCheckoutSessionParams = { ...params, customer: {} }
+    // @ts-expect-error A hosted customer cannot have both contacts null.
+    const empty: CreateCheckoutSessionParams = { ...params, customer: { email: null, phone: null } }
+  })
+
   it.each([0, 1200])('creates a hosted authorization for %i and preserves its completion status', async (amount) => {
     const body = { ...created, amount, status: 'completed', paymentStatus: 'authorized' }
     const fetchImpl = vi.fn().mockImplementation(() => response(200, body))
     const sessions = client(fetchImpl)
-    const input = { merchantOrderId: 'hold-1', amount, currency: 'EUR',
+    const input = { merchantOrderId: 'hold-1', amount, currency: 'EUR', customer: params.customer,
       ...(amount === 0 ? { customerReference: 'buyer-42', savePaymentMethod: 'required' as const } : {}),
       captureMethod: 'manual' as const, allowIncrementalAuthorization: true }
     await expect(sessions.create(input)).resolves.toMatchObject({ status: 'completed', paymentStatus: 'authorized' })
@@ -282,11 +305,12 @@ describe('checkout.sessions.create', () => {
   })
 
   it.each([
-    {},
     { email: 'buyer@example.com' },
-    { billingAddress: { postalCode: '110 00', country: 'CZ' } },
-    { shippingAddress: { name: 'Grace Hopper', phone: '+420123456789' } },
-  ])('accepts partial optional customer details: %j', async (customer) => {
+    { phone: '+420601123456' },
+    { email: 'buyer@example.com', phone: '+420601123456' },
+    { email: 'buyer@example.com', billingAddress: { postalCode: '110 00', country: 'CZ' } },
+    { phone: '+420601123456', shippingAddress: { name: 'Grace Hopper', phone: '+420123456789' } },
+  ])('accepts a customer contact with optional additional details: %j', async (customer) => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
     await client(fetchImpl).create({ ...params, customer })
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body).customer).toEqual(customer)
@@ -297,7 +321,7 @@ describe('checkout.sessions.create', () => {
       amount: 120, currency: 'EUR', merchantOrderId: 'order-1', locale: null,
       successUrl: null, cancelUrl: null, items: null, tax: null, shipping: null,
       taxRate: null, taxBreakdown: null,
-      customer: { email: null, billingAddress: { name: null, country: null }, shippingAddress: null },
+      customer: { email: null, phone: '+420601123456', billingAddress: { name: null, country: null }, shippingAddress: null },
     }
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
     await client(fetchImpl).create(nullableParams)
@@ -306,7 +330,7 @@ describe('checkout.sessions.create', () => {
 
   it('allows a zero amount only for required saving without shipping', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
-    const verification = { merchantOrderId: 'setup-1', amount: 0, currency: 'EUR', customerReference: 'buyer-42', savePaymentMethod: 'required' as const }
+    const verification = { merchantOrderId: 'setup-1', amount: 0, currency: 'EUR', customer: params.customer, customerReference: 'buyer-42', savePaymentMethod: 'required' as const }
     await client(fetchImpl).create(verification)
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toMatchObject({ amount: 0, savePaymentMethod: 'required' })
     await expect(client(fetchImpl).create({ ...verification, savePaymentMethod: 'optional' })).rejects.toBeInstanceOf(TapayaValidationError)
@@ -317,8 +341,9 @@ describe('checkout.sessions.create', () => {
 
   it('omits optional fields when absent', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
-    await client(fetchImpl).create({ merchantOrderId: 'order-1', amount: 120, currency: 'EUR' })
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ merchantOrderId: 'order-1', amount: 120, currency: 'EUR' })
+    const minimal = { merchantOrderId: 'order-1', amount: 120, currency: 'EUR', customer: params.customer }
+    await client(fetchImpl).create(minimal)
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual(minimal)
   })
 
   it.each([
