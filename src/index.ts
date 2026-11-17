@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
 import type { SavingTerms, WalletAgreement } from './client/types.js'
 
-export const VERSION = '0.6.0'
+export const VERSION = '0.7.0'
 
 const USER_AGENT = `tapaya-checkout-js/${VERSION}`
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -178,8 +178,8 @@ export type CardSavingOptions = {
   savingTerms?: SavingTerms | null
 }
 
-/** Merchant-supplied contact required when creating a hosted checkout session. */
-export type HostedCheckoutCustomer = CheckoutCustomer & ({ email: string } | { phone: string })
+/** Merchant-supplied customer details for a hosted checkout session. Without an email or phone, checkout asks the shopper for one. */
+export type HostedCheckoutCustomer = CheckoutCustomer
 
 type CheckoutSessionFields = CardSavingOptions & {
   /** Manual authorizes a card without capturing funds. Not supported with shippingOptions. */
@@ -207,8 +207,8 @@ type CheckoutSessionFields = CardSavingOptions & {
   tax?: number | null
   /** Shipping included in `amount`, in minor units. Omit or send null to hide it; zero means free shipping. */
   shipping?: number | null
-  /** Supply an email or phone at creation. Hosted checkout does not render contact inputs. */
-  customer: HostedCheckoutCustomer
+  /** Contact details you already have. Without an email or phone, hosted checkout asks the shopper for one before payment. */
+  customer?: HostedCheckoutCustomer | null
   /** Null or omission uses merchant defaults; an empty object disables collection. */
   customerCollection?: CustomerCollection | null
   /** Opt in to server-approved shipping quotes. Omission keeps the fixed creation total. */
@@ -333,10 +333,6 @@ const customerInputSchema = customerSchema.extend({
   name: z.string().max(200).nullish(),
   phone: z.string().max(30).nullish(),
 })
-const hostedCustomerSchema = customerInputSchema.and(z.union([
-  z.object({ email: z.string().refine(value => Boolean(value.trim()), 'Customer email or phone number is required.') }),
-  z.object({ phone: z.string().refine(value => Boolean(value.trim()), 'Customer email or phone number is required.') }),
-], { error: 'Customer email or phone number is required.' }))
 const collectionModeSchema = z.enum(['none', 'optional', 'required'])
 const customerCollectionSchema = z.object({
   email: collectionModeSchema.optional(),
@@ -425,7 +421,7 @@ const createSessionSchema = z.object({
   shipping: minorAmountSchema.nullish(),
   taxRate: z.number().nonnegative().nullish(),
   taxBreakdown: taxBreakdownSchema.nullish(),
-  customer: hostedCustomerSchema,
+  customer: customerInputSchema.nullish(),
   customerCollection: customerCollectionSchema.nullish(),
   shippingOptions: shippingOptionsSchema.nullish(),
 }).superRefine((value, context) => {
@@ -1156,8 +1152,11 @@ class CheckoutSessions {
     const existing = await this.findByOrder(order?.merchantOrderId, options)
     const shipping = order.shippingOptions != null || existing?.shippingQuote != null
     if (existing && !shipping && (existing.amount !== order.amount || existing.currency !== order.currency)) throw new TapayaOrderMismatchError(existing.id)
+    const contactChanged = existing?.paymentStatus === 'unpaid' && order.customer != null &&
+      Object.entries(order.customer).some(([field, value]) => value != null &&
+        JSON.stringify(value) !== JSON.stringify(existing.customer?.[field as keyof CheckoutCustomer]))
     // A quote may change the read total. Replay creation so the backend verifies the immutable input hash instead.
-    if (existing && !shipping && !((existing.paymentStatus === 'failed' || existing.paymentStatus === 'cancelled') && existing.retryAllowed)) return existing
+    if (existing && !shipping && !contactChanged && !((existing.paymentStatus === 'failed' || existing.paymentStatus === 'cancelled') && existing.retryAllowed)) return existing
     const retry = existing && (existing.paymentStatus === 'failed' || existing.paymentStatus === 'cancelled') && existing.retryAllowed
     let key = `${order.merchantOrderId}:${existing ? `${retry ? 'after' : 'validate'}:${existing.id}` : 'initial'}`
     // Preserve existing keys for replay, and hash references that cannot be HTTP header values.

@@ -43,6 +43,7 @@ export function usePayment(options: UsePaymentOptions | null) {
   const walletButtonColor = options?.appearance?.walletButtonColor
   const walletButtonRadius = options?.appearance?.walletButtonRadius
   const paymentMethod = options?.paymentMethod
+  const privacyNotice = options?.privacyNotice
   const hasWalletClick = options?.onWalletClick !== undefined
   const prepareEndpoint = typeof options?.prepare === 'string' ? options.prepare : undefined
   const activeSecret = useRef<{ identity: string; value: string } | null>(null)
@@ -56,6 +57,7 @@ export function usePayment(options: UsePaymentOptions | null) {
     walletButtonRadius,
     prepareEndpoint,
     paymentMethod,
+    privacyNotice,
     hasWalletClick,
   })
   // Switching methods changes the fields, but still pays the same reserved order.
@@ -64,11 +66,11 @@ export function usePayment(options: UsePaymentOptions | null) {
     // Never remove a frame while it is tokenizing, challenging or confirming.
     if (snapshot.busy) return
     setPresentation((current) =>
-      current.locale === locale && current.labels === labels && current.cardSaving === cardSaving && current.cardBrandIcon === cardBrandIcon && current.walletButtonType === walletButtonType && current.walletButtonColor === walletButtonColor && Object.is(current.walletButtonRadius, walletButtonRadius) && current.prepareEndpoint === prepareEndpoint && current.paymentMethod === paymentMethod && current.hasWalletClick === hasWalletClick
+      current.locale === locale && current.labels === labels && current.cardSaving === cardSaving && current.cardBrandIcon === cardBrandIcon && current.walletButtonType === walletButtonType && current.walletButtonColor === walletButtonColor && Object.is(current.walletButtonRadius, walletButtonRadius) && current.prepareEndpoint === prepareEndpoint && current.paymentMethod === paymentMethod && current.privacyNotice === privacyNotice && current.hasWalletClick === hasWalletClick
         ? current
-        : { locale, labels, cardSaving, cardBrandIcon, walletButtonType, walletButtonColor, walletButtonRadius, prepareEndpoint, paymentMethod, hasWalletClick },
+        : { locale, labels, cardSaving, cardBrandIcon, walletButtonType, walletButtonColor, walletButtonRadius, prepareEndpoint, paymentMethod, privacyNotice, hasWalletClick },
     )
-  }, [locale, labels, cardSaving, cardBrandIcon, walletButtonType, walletButtonColor, walletButtonRadius, prepareEndpoint, paymentMethod, hasWalletClick, snapshot.busy])
+  }, [locale, labels, cardSaving, cardBrandIcon, walletButtonType, walletButtonColor, walletButtonRadius, prepareEndpoint, paymentMethod, privacyNotice, hasWalletClick, snapshot.busy])
 
   useEffect(() => {
     if (!publishableKey) {
@@ -83,6 +85,7 @@ export function usePayment(options: UsePaymentOptions | null) {
     if (
       presentation.hasWalletClick !== (latest.current?.onWalletClick !== undefined) ||
       presentation.paymentMethod !== latest.current?.paymentMethod ||
+      presentation.privacyNotice !== latest.current?.privacyNotice ||
       presentation.locale !== latest.current?.locale ||
       presentation.labels !== JSON.stringify(latest.current?.labels ?? null) ||
       presentation.cardSaving !== JSON.stringify(latest.current?.cardSaving ?? null) ||
@@ -128,6 +131,7 @@ export function usePayment(options: UsePaymentOptions | null) {
                     return prepare()
                   },
           paymentMethod: presentation.paymentMethod,
+          privacyNotice: presentation.privacyNotice,
           cardSaving: JSON.parse(presentation.cardSaving) ?? undefined,
           locale: presentation.locale,
           labels: JSON.parse(presentation.labels) ?? undefined,

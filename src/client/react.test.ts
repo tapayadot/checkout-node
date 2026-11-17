@@ -53,7 +53,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   created.length = 0
   vi.mocked(loadTapaya).mockResolvedValue({
-    version: '0.3.0',
+    version: '0.4.0',
     handleNextAction: vi.fn(),
     createPayment: (options = {}) => {
       created.push(options)

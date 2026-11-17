@@ -4,7 +4,7 @@
 
 TypeScript SDK for [Hosted Checkout](https://docs.tapaya.com/online/integration/hosted_checkout),
 [Embedded Checkout](https://docs.tapaya.com/online/integration/embedded_checkout), and saved-card payments.
-This README describes version `0.6.0`. See [Upgrade from 0.5.x](#upgrade-from-05x) for migration guidance.
+This README describes version `0.7.0`. See [Upgrade from 0.6.x](#upgrade-from-06x) for migration guidance.
 Create a Checkout session for an order, redirect the customer to the Tapaya-hosted payment page, and verify the
 payment on your server before fulfilling the order. For embedded card fields, the same package provides the browser
 SDK (`@tapayadot/checkout/client`) and a React hook (`@tapayadot/checkout/react`).
@@ -22,7 +22,27 @@ npm install @tapayadot/checkout
 
 For setup and integration guides, see the [documentation](#documentation).
 
+## Upgrade from 0.6.x
+
+- Hosted sessions no longer require a contact, and `customer` is optional. Without an
+  email or phone, hosted checkout asks the shopper for one before payment: an email by
+  default, or the contact fields your `customerCollection` requests. A payment still
+  needs an email or phone before it is confirmed.
+- The browser loader loads Tapaya.js `0.4.0` and refuses older releases. If your page
+  includes the script tag itself, use `/checkout/0.4.0/checkout.js` and take integrity
+  hashes from `0.4.0/manifest.json`.
+- The card fields tell the shopper that Tapaya processes the payment and link Tapaya's
+  privacy policy. See [Privacy notice](#privacy-notice).
+- The card fields render the email and phone inputs that `customerCollection` requests
+  and you did not supply. A wallet fills them when it returns a contact.
+- New optional labels: `cardholderPlaceholder`, `declinedLimitExceeded`, and
+  `declinedInsufficientFunds`. A declined result can include `declineReason`.
+- `checkout.sessions.prepare()` sends changed contact details to an embedded payment
+  that has not been submitted yet.
+
 ## Upgrade from 0.5.x
+
+0.7.0 removes the following contact requirement again.
 
 Hosted session creation now requires `customer.email` or `customer.phone`. Supply
 at least one nonblank contact from your store's checkout:
@@ -39,7 +59,7 @@ const session = await tapaya.checkout.sessions.create({
 `HostedCheckoutCustomer` requires at least one contact in TypeScript. Runtime
 validation throws `TapayaValidationError` before sending a request if both
 contacts are missing, null, empty, or whitespace-only. `customerCollection` does
-not replace this requirement. Checkout does not render email or phone inputs.
+not replace this requirement.
 
 Embedded preparation and saved-card request validation are unchanged in this
 package. Embedded preparation can omit contacts, but the payment API requires an
@@ -79,7 +99,7 @@ migration notes below.
 ## Upgrade from 0.2.x
 
 - Tapaya.js 0.2.0 introduced Apple Pay and Google Pay. Use the current
-  `/checkout/0.3.0/checkout.js` path when upgrading.
+  `/checkout/0.4.0/checkout.js` path when upgrading.
 - `environment: 'production'` now runs embedded checkout against `https://api.tapaya.com` instead
   of throwing. `configuration()` returns `environment: 'production'` with live keys.
 - Without `environment` or `TAPAYA_ENVIRONMENT`, a `tapaya_live_` key now selects production. A live key
@@ -98,7 +118,7 @@ migration notes below.
 - Import browser code from `@tapayadot/checkout/client` and the React hook from
   `@tapayadot/checkout/react`. The root entry is for server code.
 
-The browser loader targets Tapaya.js at `/checkout/0.3.0/checkout.js` on
+The browser loader targets Tapaya.js at `/checkout/0.4.0/checkout.js` on
 `https://js.tapaya.com`. Its version does not follow this package's server releases.
 
 ## Quick start
@@ -278,7 +298,7 @@ organization Secret key.
 
 `tapaya.checkout.sessions.create(params, options?)` selects hosted checkout when `mode` is omitted or `'hosted'`.
 For `mode: 'embedded'`, see [Embedded checkout](#embedded-checkout). Hosted checkout requires `merchantOrderId`,
-`amount`, `currency`, and `customer` with an email or phone. `merchantOrderId` is your order reference,
+`amount`, and `currency`. `merchantOrderId` is your order reference,
 1 to 200 characters. `amount` is the final total,
 including tax and shipping, an integer between 0 and 2,147,483,647 minor units. Zero verifies and saves a payment method; it requires `savePaymentMethod: 'required'` and no `shippingOptions`. `currency` is a three-letter ISO 4217
 code. Tapaya stores and returns it uppercase.
@@ -299,8 +319,9 @@ Optional fields:
 | `taxBreakdown` | Tax per rate, `[{ taxRate, tax }]`, for orders with mixed rates. Use instead of `taxRate`: the types reject both together. |
 | `items` | Products shown on the hosted page: `reference`, `name`, `description`, `quantity`, `unitAmount`, and an optional `imageUrl`. Items are for display only and do not change the amount charged. Sessions return `imageUrl: null` for items without an image. |
 
-`customer.email` or `customer.phone` must contain non-whitespace text. Other customer
-details, including name, billing address, and shipping address, are optional.
+`customer` is optional. Pass the contact details you already have. Without an email or
+phone, hosted checkout asks the shopper for one before payment. Name, billing address,
+and shipping address are optional too.
 
 Before sending, the SDK checks types, required fields, integer amounts, the currency format, and a maximum email
 length of 254 characters. Return URLs must be absolute HTTPS URLs, with the local HTTP exception described under
@@ -444,9 +465,9 @@ and creates the next attempt after a decline. Every decline sets `retryAllowed`,
 another card for the same order. It derives the idempotency keys
 itself, so a lost response or a concurrent call replays the same attempt. Call it on every page load and
 every submission. `order` takes `merchantOrderId`, `amount`, uppercase `currency`, and optional
-`customer` details. Preparation can omit `customer`, but confirmation requires
-an email or phone. Supply the contact from your backend before the shopper pays;
-`customerCollection` does not render email or phone inputs. See
+`customer` details. Preparation can omit `customer`. Confirmation requires an
+email or phone; without one, the card fields ask the shopper for it, as an email by
+default or the contact fields your `customerCollection` requests. See
 [Customer details and shipping](https://docs.tapaya.com/online/integration/customer_and_shipping).
 Hosted-only fields such as `items`, `tax`, and return URLs are rejected.
 
@@ -620,7 +641,7 @@ Cards saved at checkout (`savePaymentMethod`) are listed with `tapaya.paymentMet
 and charged with `tapaya.payments`. Gateway key mode selects test or live payments. See
 [Charge the saved card](https://docs.tapaya.com/online/integration/saved_payment_methods#charge-the-saved-card) and
 [When a charge is declined](https://docs.tapaya.com/online/integration/saved_payment_methods#when-a-charge-is-declined).
-`handleNextAction` requires SDK `0.4.0` or newer and Tapaya.js `0.3.0`.
+`handleNextAction` requires SDK `0.4.0` or newer and Tapaya.js `0.3.0` or newer.
 
 Without the shopper, for example a renewal or a top-up, Tapaya charges the card before `create` resolves:
 
@@ -741,6 +762,10 @@ form.addEventListener('submit', async (event) => {
 
 `prepare: '/api/payments'` sends a same-origin POST with cookies and no body, on
 mount and on each submission. Your endpoint returns `{ clientSecret, status }`.
+Pass the current contact details to `checkout.sessions.prepare()` on your server.
+Before submission, changed contacts update the existing embedded payment. Omitted
+or null fields preserve their current values. After submission, contacts remain
+frozen.
 The SDK checks the response and secret before charging, rejects redirects, and
 does not retry the request automatically. If you need custom headers, CSRF tokens,
 a request body, or a cross-origin endpoint, pass a function instead:
@@ -764,8 +789,8 @@ You can also pass a known `clientSecret` to `createPayment()` instead of
 endpoint for one submission. A pending payment always checks its current status
 instead of charging again.
 
-`loadTapaya` loads Tapaya.js from `https://js.tapaya.com/checkout/0.3.0/checkout.js`.
-Compatible updates to the current `0.3.0` release can replace its CDN assets.
+`loadTapaya` loads Tapaya.js from `https://js.tapaya.com/checkout/0.4.0/checkout.js`.
+Compatible updates to the current `0.4.0` release can replace its CDN assets.
 Browsers can cache those assets for five minutes. Older versioned paths stay unchanged.
 Server-only releases of this package do not change the script version.
 
@@ -778,7 +803,7 @@ call `loadTapaya` again to retry, or use `retryMount()` with the React hook.
 #### Without a bundler
 
 ```html
-<script src="https://js.tapaya.com/checkout/0.3.0/checkout.js"></script>
+<script src="https://js.tapaya.com/checkout/0.4.0/checkout.js"></script>
 <script>
   const tapaya = Tapaya('pk_test_…', { apiOrigin: 'https://api.sandbox.tapaya.com' })
   const payment = tapaya.createPayment({ prepare: '/api/payments' })
@@ -786,7 +811,7 @@ call `loadTapaya` again to retry, or use `retryMount()` with the React hook.
 </script>
 ```
 
-To pin exact script contents, use the SHA-384 hashes in `0.3.0/manifest.json` for
+To pin exact script contents, use the SHA-384 hashes in `0.4.0/manifest.json` for
 `integrity` attributes. Update those hashes when adopting replacement assets at
 the same path. There are no release channel aliases.
 
@@ -1021,8 +1046,26 @@ field: `'left'` (default), `'right'` or `'none'`. The provider draws it at a fix
 mount; `update()` does not change it, and the React hook remounts the fields when
 it changes. Set it before the shopper starts typing.
 
-`labels` translates the field labels and status messages. The provider's own
-field placeholders are not translated.
+`labels` translates the field labels and status messages. `labels.cardholderPlaceholder`
+replaces the cardholder name placeholder. Customer contact fields take `email`, `phone`,
+and `customerName` for their labels; `emailPlaceholder`, `phonePlaceholder`, and
+`customerNamePlaceholder` for the hint shown when a field is the only one; and
+`emailRequired`, `emailInvalid`, `phoneRequired`, `contactRequired`, and
+`customerDetailsRequired` for their error messages. Unset labels use the translated defaults. The provider's own card number, expiry and CVC
+placeholders are not translated.
+
+### Privacy notice
+
+The card fields end with a line telling the shopper that Tapaya processes the payment,
+linking Tapaya's privacy policy in the payment language. If your own privacy policy
+names Tapaya as your payment processor, you can hide the line:
+
+```ts
+const payment = tapaya.createPayment({ prepare: '/api/payments', privacyNotice: 'merchant' })
+```
+
+Use `merchant` only when your policy says so: each payment records which notice the
+shopper was shown. `usePayment` accepts the same option.
 
 ### Content Security Policy
 

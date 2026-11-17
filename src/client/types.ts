@@ -43,6 +43,8 @@ export type PaymentResult = {
   paymentId?: string
   /** Only Tapaya can authorize another attempt after a decline. */
   retryAllowed: boolean
+  /** Normalized reason after a decline. Absent when unavailable or the payment has not declined. */
+  declineReason?: DeclineReason
   /** Contact details returned by the wallet, for checkout presentation. Never proof of payment. */
   walletContact?: {
     method: 'apple_pay' | 'google_pay'
@@ -121,6 +123,30 @@ export type PaymentLabels = {
   /** Additional disclosure beneath the label for future merchant-initiated charges. */
   saveCardOffSession?: string
   cardholder: string
+  /** Cardholder name input placeholder. Defaults to "Enter full name on card" in the payment language. */
+  cardholderPlaceholder?: string
+  /** Customer email field label. */
+  email?: string
+  /** Email placeholder when it is the only customer field. */
+  emailPlaceholder?: string
+  /** Shown when a required email is empty. */
+  emailRequired?: string
+  /** Shown when the email is not a valid address. */
+  emailInvalid?: string
+  /** Customer phone field label. */
+  phone?: string
+  /** Phone placeholder when it is the only customer field. */
+  phonePlaceholder?: string
+  /** Shown when a required phone is empty. */
+  phoneRequired?: string
+  /** Customer name field label. */
+  customerName?: string
+  /** Name placeholder when it is the only customer field. */
+  customerNamePlaceholder?: string
+  /** Shown when either an email or a phone would do and neither was entered. */
+  contactRequired?: string
+  /** Shown when another customer field, such as the name or billing address, is incomplete. */
+  customerDetailsRequired?: string
   number: string
   expiry: string
   cvc: string
@@ -141,6 +167,10 @@ export type PaymentLabels = {
   successful: string
   /** A decline Tapaya allows another attempt for. */
   declined: string
+  /** Limit decline when another attempt is allowed. The generic declined override takes precedence unless this is set. */
+  declinedLimitExceeded?: string
+  /** Insufficient-funds decline when another attempt is allowed. The generic declined override takes precedence unless this is set. */
+  declinedInsufficientFunds?: string
   /** A decline that ends this payment. Your page should offer the shopper a way forward. */
   declinedFinal: string
   pending: string
@@ -264,6 +294,12 @@ export type PaymentOptions = {
    * while another payment is safe to start.
    */
   paymentMethod?: 'card' | 'apple_pay' | 'google_pay'
+  /**
+   * Who tells the shopper that Tapaya processes their payment data. `tapaya` (default): the fields
+   * show a line linking Tapaya's privacy policy. `merchant`: your privacy policy names Tapaya as the
+   * payment processor, so the fields show no notice.
+   */
+  privacyNotice?: 'tapaya' | 'merchant'
   /** Show available wallets for this total, in minor units. Omit or pass null to keep card entry only. */
   wallets?: WalletOptions | null
   /** Validate your checkout and reserve its payment when a wallet is clicked, never on mount. */
