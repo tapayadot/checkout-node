@@ -156,6 +156,33 @@ describe('checkout modes', () => {
     })
   })
 
+  it('sends changed contacts when preparing an existing unsubmitted payment', async () => {
+    const updated = { ...order.customer, email: 'edited@example.com' }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(payment))
+      .mockResolvedValueOnce(Response.json({ ...payment, customer: updated }))
+    const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
+    expect(await sessions.prepare({ ...order, customer: updated })).toMatchObject({ id: payment.id, customer: updated })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({ customer: updated })
+    expect(fetcher.mock.calls[1][1].headers['Idempotency-Key']).toBe(`order-1:validate:${payment.id}`)
+  })
+
+  it('adds contacts at submission to the payment prepared without them at mount', async () => {
+    const { customer, ...withoutCustomer } = order
+    const empty = { ...payment, customer: null }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(Response.json(empty))
+      .mockResolvedValueOnce(Response.json(empty))
+      .mockResolvedValueOnce(Response.json(payment))
+    const sessions = new Tapaya('secret', { fetch: fetcher }).checkout.sessions
+    expect(await sessions.prepare(withoutCustomer)).toMatchObject({ id: payment.id, customer: null })
+    expect(await sessions.prepare(order)).toMatchObject({ id: payment.id, customer })
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).not.toHaveProperty('customer')
+    expect(JSON.parse(fetcher.mock.calls[3][1].body)).toMatchObject({ customer })
+  })
+
   it('prepares the first attempt and reuses it on later calls', async () => {
     const notFound = () => Response.json({ code: 'API-0404', message: 'Not found' }, { status: 404 })
     const fetcher = vi.fn()

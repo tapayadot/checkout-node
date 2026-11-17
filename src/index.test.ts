@@ -248,26 +248,24 @@ describe('client configuration', () => {
 })
 
 describe('checkout.sessions.create', () => {
-  it.each([undefined, 'hosted'] as const)('rejects missing contacts before sending for mode %s, regardless of collection policy', async mode => {
-    const fetchImpl = vi.fn()
-    const sessions = client(fetchImpl)
-    for (const customer of [undefined, null, {}, { name: 'Buyer' }, { email: null, phone: null },
-      { email: ' ', phone: '\t' }, { email: '' }, { phone: '' }, { billingAddress: { phone: '+420601123456' } }]) {
-      const input = { ...params, mode, customer, customerCollection: { email: 'required', phone: 'optional' } }
-      const error = await sessions.create(input as unknown as CreateCheckoutSessionParams).catch((error: unknown) => error)
-      expect(error).toBeInstanceOf(TapayaValidationError)
-      expect((error as TapayaValidationError).fieldErrors.some(entry => entry.field === 'customer' || entry.field.startsWith('customer.'))).toBe(true)
+  it.each([undefined, 'hosted'] as const)('creates a hosted session without a contact for mode %s, so checkout collects it', async mode => {
+    for (const customer of [undefined, null, {}, { name: 'Buyer' }, { email: null, phone: null }]) {
+      const fetchImpl = vi.fn().mockResolvedValue(response(200, created))
+      const input: CreateCheckoutSessionParams = { ...params, mode, customer, customerCollection: { email: 'required' } }
+      if (customer === undefined) delete input.customer
+      await expect(client(fetchImpl).create(input)).resolves.toBeDefined()
+      const body = JSON.parse(fetchImpl.mock.calls[0][1].body)
+      if (customer === undefined) expect(body).not.toHaveProperty('customer')
+      else expect(body.customer).toEqual(customer)
     }
-    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('requires an email or phone in hosted creation types', () => {
+  it('accepts hosted creation types without a contact', () => {
     const email: CreateCheckoutSessionParams = { ...params, customer: { email: 'buyer@example.com' } }
-    const phone: CreateCheckoutSessionParams = { ...params, customer: { phone: '+420601123456' } }
-    // @ts-expect-error A hosted customer must supply an email or phone.
-    const missing: CreateCheckoutSessionParams = { ...params, customer: {} }
-    // @ts-expect-error A hosted customer cannot have both contacts null.
-    const empty: CreateCheckoutSessionParams = { ...params, customer: { email: null, phone: null } }
+    const name: CreateCheckoutSessionParams = { ...params, customer: { name: 'Buyer' } }
+    const { customer: _customer, ...omitted } = params
+    const none: CreateCheckoutSessionParams = omitted
+    expect([email, name, none]).toHaveLength(3)
   })
 
   it.each([0, 1200])('creates a hosted authorization for %i and preserves its completion status', async (amount) => {
