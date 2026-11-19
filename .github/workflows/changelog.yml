@@ -1,0 +1,73 @@
+name: Changelog
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions: {}
+
+# A newer push replaces an older run, so two runs never race on the preview comment.
+concurrency:
+  group: changelog-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    name: Changelog updated
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      preview: ${{ steps.preview.outputs.preview }}
+    env:
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      AUTHOR: ${{ github.event.pull_request.user.login }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Render preview
+        id: preview
+        run: |
+          node scripts/changelog/cli.mjs --render-comment --base "origin/$BASE_REF" --head-ref "$HEAD_REF" --author "$AUTHOR" > "$RUNNER_TEMP/preview.md"
+          delimiter="preview_$(openssl rand -hex 16)"
+          {
+            echo "preview<<$delimiter"
+            cat "$RUNNER_TEMP/preview.md"
+            echo
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+      - name: Check CHANGELOG.md
+        run: node scripts/changelog/cli.mjs --base "origin/$BASE_REF" --head-ref "$HEAD_REF" --author "$AUTHOR"
+
+  comment:
+    name: Changelog comment
+    needs: changelog
+    # Fork pull requests get a read-only token, so they get no comment.
+    if: always() && needs.changelog.outputs.preview != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Create or update the preview comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          PREVIEW: ${{ needs.changelog.outputs.preview }}
+        run: |
+          printf '%s' "$PREVIEW" > "$RUNNER_TEMP/body.md"
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- changelog-preview -->"))) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/body.md" > /dev/null
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/body.md" > /dev/null
+          fi
