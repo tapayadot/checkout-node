@@ -34,7 +34,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "vitest run && node --test scripts/release-checks.mjs",
+    "test": "vitest run && node --test scripts/release-checks.mjs 'scripts/changelog/*-checks.mjs'",
+    "lint": "node scripts/changelog/cli.mjs",
+    "changelog:release": "node scripts/changelog/cli.mjs --release",
     "prepack": "pnpm build"
   },
   "dependencies": {
