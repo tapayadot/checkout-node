@@ -167,9 +167,9 @@ export type PaymentLabels = {
   successful: string
   /** A decline Tapaya allows another attempt for. */
   declined: string
-  /** Limit decline when another attempt is allowed. The generic declined override takes precedence unless this is set. */
+  /** Limit decline when another attempt is allowed. Without it, Tapaya's own message wins over a generic `declined` override, unless Tapaya has no copy for the requested `locale`. */
   declinedLimitExceeded?: string
-  /** Insufficient-funds decline when another attempt is allowed. The generic declined override takes precedence unless this is set. */
+  /** Insufficient-funds decline when another attempt is allowed. Without it, Tapaya's own message wins over a generic `declined` override, unless Tapaya has no copy for the requested `locale`. */
   declinedInsufficientFunds?: string
   /** A decline that ends this payment. Your page should offer the shopper a way forward. */
   declinedFinal: string
